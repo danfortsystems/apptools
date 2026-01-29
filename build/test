@@ -1,0 +1,394 @@
+#!/usr/bin/env bash
+
+# Local test script
+# Usage: <runner> test [--build-dir <directory>] [--no-db-create] [--db-url <url>] [--keep-db-file] [--log-dir <directory>] [--only <test-types>] [--fast], where <runner> is one of:
+#	pnpm run (if `pnpm run setup` has been run to setup tooling commands)
+#	./tools/_run.sh (To run the command directly from the project root)
+#
+# Options:
+#   --build-dir <directory>	Directory containing build artifacts (default: ./dist)
+#   --no-db-create		Don't create a random test database (uses DATABASE_URL as-is)
+#   --db-url <url>		Database connection URL (overrides DATABASE_URL env var)
+#   --keep-db-file		Keep db.migrate.sql file after successful migration
+#   --log-dir <directory>	Custom directory for test logs (default: ./logs/test/<timestamp>)
+#   --only <test-types>	Run only specified test types (comma-separated: units,api,gui,e2e)
+#   --fast				Use fast Playwright configuration (Chrome only, faster execution)
+#
+# Examples:
+#   ./tools/_run.sh test			# Run all tests
+#   pnpm run test --only units		# Run only unit tests
+#   pnpm run test --only api,gui	# Run API and GUI tests
+#   pnpm run test --only e2e,units	# Run E2E and unit tests
+#   pnpm run test --fast			# Run all tests with fast Playwright config (Chrome only)
+#   pnpm run test --only gui --fast	# Run GUI tests with fast Playwright config
+
+set -euo pipefail
+source ./tools/_utils.sh
+
+# Parse & validate arguments, overriding defaults
+{
+	# Default args
+	DB_URL="$DATABASE_URL" # env variable
+	CREATE_RANDOM_DB=true  # By default
+	BUILD_DIR="./dist"
+	KEEP_DB_FILE=false
+	LOG_DIR=""
+	RUN_UNITS=true
+	RUN_API=true
+	RUN_GUI=true
+	RUN_E2E=true
+	FAST_MODE=false
+
+	while [[ $# -gt 0 ]]; do
+		case $1 in
+			--db-url)
+				DB_URL="$2"
+				shift 2
+				;;
+			--no-db-create)
+				CREATE_RANDOM_DB=false
+				shift
+				;;
+			--build-dir)
+				BUILD_DIR="$2"
+				shift 2
+				;;
+			--keep-db-file)
+				KEEP_DB_FILE=true
+				shift
+				;;
+			--log-dir)
+				LOG_DIR="$2"
+				shift 2
+				;;
+			--fast)
+				FAST_MODE=true
+				shift
+				;;
+			--only)
+				# Reset all test runs to false
+				RUN_UNITS=false
+				RUN_API=false
+				RUN_GUI=false
+				RUN_E2E=false
+
+				# Parse comma-separated test types
+				IFS=',' read -ra TEST_TYPES <<< "$2"
+				for test_type in "${TEST_TYPES[@]}"; do
+					case "$test_type" in
+						units)
+							RUN_UNITS=true
+							;;
+						api)
+							RUN_API=true
+							;;
+						gui)
+							RUN_GUI=true
+							;;
+						e2e)
+							RUN_E2E=true
+							;;
+						*)
+							echo "Unknown test type: $test_type"
+							echo "Supported types: units, api, gui, e2e"
+							exit 1
+							;;
+					esac
+				done
+				shift 2
+				;;
+			*)
+				echo "Unknown argument: $1"
+				echo "Usage: test [--db-url <url>] [--no-db-create] [--build-dir <directory>] [--keep-db-file] [--log-dir <directory>] [--only <test-types>] [--fast]"
+				echo "Test types: units, api, gui, e2e (comma-separated)"
+				exit 1
+				;;
+		esac
+	done
+
+	# Validate arguments
+	if [[ -z "$DB_URL" ]]; then
+		print_error "--db-url argument and/or DATABASE_URL env variable not set. Aborting"
+		exit 1
+	else
+		print_step "Test will use db url: $DB_URL."
+	fi
+
+	print_header "Test script started with args: db-url=$DB_URL, build-dir=$BUILD_DIR, keep-db-file=$KEEP_DB_FILE, no-db-create=$(! $CREATE_RANDOM_DB && echo true || echo false)"
+}
+
+# Create logs folder & define special chars to strip from logs
+{
+	TIMESTAMP=$(date +"%s__%Y-%m-%d__%I-%M-%S_%p")
+	OUT_DIR="${LOG_DIR:-./logs/test/${TIMESTAMP}}"
+	mkdir -p "$OUT_DIR"
+
+	# Set up ANSI escape sequence stripping
+	strip_pattern="s/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[mGKABCDHJKSfn]//g"
+}
+
+# Run unit tests, if requested
+{
+	if [[ "$RUN_UNITS" == "true" ]]; then
+		print_header "Running unit tests..." 
+		if ! bun test tests/unit/ 2>&1 | tee >(sed -E "$strip_pattern" > "$OUT_DIR/unit.log"); then
+			print_error "Unit tests failed"
+			exit 1
+		else
+			print_step "Unit tests complete \n"
+		fi
+	fi
+}
+
+# Prepare db, services, & server to run other tests, if requested
+{
+	if [[ "$RUN_API" == "true" || "$RUN_GUI" == "true" || "$RUN_E2E" == "true" ]]; then
+
+		# Create random database unless --no-db-create was specified
+		if [[ "$CREATE_RANDOM_DB" == "true" ]]; then
+			# Generate random database name
+			TIMESTAMP=$(date +%s)
+			RANDOM_SUFFIX=$(openssl rand -hex 4 2>/dev/null || echo "${TIMESTAMP: -4}")
+			DB_NAME="test_airkeys_${TIMESTAMP}_${RANDOM_SUFFIX}"
+
+			# Extract base URL (everything before the last /)
+			BASE_URL="${DB_URL%/*}"
+
+			# Create the database and install extensions
+			# Step 1: Create the database
+			if ! psql "${BASE_URL}/postgres" -v ON_ERROR_STOP=1 -c \
+				"CREATE DATABASE \"$DB_NAME\";" 2>&1; then
+				print_error "Failed to create database '$DB_NAME'"
+				exit 1
+			fi
+
+			# Step 2: Initialize schemas and extensions
+			if ! psql "${BASE_URL}/${DB_NAME}" -v ON_ERROR_STOP=1 <<-'SQL' 2>&1
+				CREATE SCHEMA IF NOT EXISTS post_gis;
+				CREATE SCHEMA IF NOT EXISTS bt_gist;
+
+				CREATE EXTENSION IF NOT EXISTS postgis SCHEMA post_gis;
+				CREATE EXTENSION IF NOT EXISTS btree_gist SCHEMA bt_gist;
+			SQL
+			then
+				print_error "Failed to initialize database '$DB_NAME'"
+				# Try to cleanup database before failing
+				psql "${BASE_URL}/postgres" -c "DROP DATABASE IF EXISTS \"$DB_NAME\";" 2>/dev/null || true
+				exit 1
+			fi
+
+			# Update DB_URL with the new database name
+			DB_URL="${BASE_URL}/${DB_NAME}"
+		fi
+
+		# Run db scripts (init for random, migrate for main)
+		if [[ "$CREATE_RANDOM_DB" == "true" && -n "${DB_NAME:-}" ]]; then
+			# For random test DB, run the init script
+			if [[ -f "$BUILD_DIR/db.init.sql" ]]; then
+				print_step "Running init script '$BUILD_DIR/db.init.sql' on test database"
+
+				if ! psql "$DB_URL" -v ON_ERROR_STOP=1 -v schema=public -f "$BUILD_DIR/db.init.sql"; then
+					print_error "Database initialization failed. Aborting tests."
+					exit 1
+				fi
+			fi
+		else
+			# For primary DB, run the migrate script
+			if [[ -f "$BUILD_DIR/db.migrate.sql" ]]; then
+				print_step "Running migration script '$BUILD_DIR/db.migrate.sql' on Db"
+
+				if psql "$DB_URL" -v ON_ERROR_STOP=1 -v schema=public -f "$BUILD_DIR/db.migrate.sql"; then
+					# delete it on success (unless --keep-db-file is specified)
+					if [[ "$KEEP_DB_FILE" != "true" ]]; then
+						rm "$BUILD_DIR/db.migrate.sql"
+					fi
+				else
+					print_error "Database migration failed. Aborting tests."
+					exit 1
+				fi
+			fi
+		fi
+
+		# Ensure MinIO is started if using local object storage
+		if [[ -n "$OBJECT_STORAGE_ROOT_URL" ]] && [[ "$OBJECT_STORAGE_ROOT_URL" =~ localhost|127\.0\.0\.1 ]]; then
+			print_step "Ensuring MinIO (local object storage) is running..."
+
+			# Start podman machine if not running
+			if ! podman machine list 2>/dev/null | grep -qE "Running|Currently running"; then
+				print_step "Starting Podman machine..."
+				podman machine start >/dev/null 2>&1 || {
+					print_warning "Failed to start Podman machine. Continuing anyway..."
+				}
+			fi
+
+			# Check if minio container exists
+			CONTAINER_NAME="minio-airkeys"
+			if ! podman ps -a --format "{{.Names}}" 2>/dev/null | grep -q "^${CONTAINER_NAME}$"; then
+				print_step "Creating MinIO container..."
+				podman run -d --name "$CONTAINER_NAME" \
+					-p 9000:9000 -p 9001:9001 \
+					-e "MINIO_ROOT_USER=${OBJECT_STORAGE_ACCESS_KEY_ID:-minioadmin}" \
+					-e "MINIO_ROOT_PASSWORD=${OBJECT_STORAGE_ACCESS_KEY_SECRET:-minioadmin}" \
+					minio/minio server /data --console-address ":9001" >/dev/null 2>&1 || {
+					print_warning "Failed to create MinIO container. Continuing anyway..."
+				}
+				# Wait for MinIO to start
+				sleep 3
+			else
+				# Check if container is running
+				if ! podman ps --format "{{.Names}}" 2>/dev/null | grep -q "^${CONTAINER_NAME}$"; then
+					print_step "Starting existing MinIO container..."
+					podman start "$CONTAINER_NAME" >/dev/null 2>&1 || {
+						print_warning "Failed to start MinIO container. Continuing anyway..."
+					}
+				fi
+			fi
+
+			# Create bucket if it doesn't exist
+			BUCKET_NAME="${OBJECT_STORAGE_BUCKET:-airkeys}"
+			if podman exec "$CONTAINER_NAME" mc alias set local http://localhost:9000 "${OBJECT_STORAGE_ACCESS_KEY_ID:-minioadmin}" "${OBJECT_STORAGE_ACCESS_KEY_SECRET:-minioadmin}" >/dev/null 2>&1; then
+				podman exec "$CONTAINER_NAME" mc mb "local/${BUCKET_NAME}" --ignore-existing >/dev/null 2>&1 || true
+			fi
+		fi
+
+		# Ensure MailHog is started when using local SMTP server
+		if [[ -n "${SMTP_HOST:-}" ]] && [[ "$SMTP_HOST" =~ localhost|127\.0\.0\.1 ]]; then
+			print_step "Ensuring MailHog (local email testing) is running..."
+
+			# Start podman machine if not running
+			if ! podman machine list 2>/dev/null | grep -qE "Running|Currently running"; then
+				print_step "Starting Podman machine..."
+				podman machine start >/dev/null 2>&1 || {
+					print_warning "Failed to start Podman machine. Continuing anyway..."
+				}
+			fi
+
+			# Check if mailhog container exists
+			CONTAINER_NAME="mailhog-airkeys"
+			if ! podman ps -a --format "{{.Names}}" 2>/dev/null | grep -q "^${CONTAINER_NAME}$"; then
+				print_step "Creating MailHog container..."
+				podman run -d --name "$CONTAINER_NAME" \
+					-p 1025:1025 -p 8025:8025 \
+					mailhog/mailhog >/dev/null 2>&1 || {
+					print_warning "Failed to create MailHog container. Continuing anyway..."
+				}
+				# Wait for MailHog to start
+				sleep 3
+			else
+				# Check if container is running
+				if ! podman ps --format "{{.Names}}" 2>/dev/null | grep -q "^${CONTAINER_NAME}$"; then
+					print_step "Starting existing MailHog container..."
+					podman start "$CONTAINER_NAME" >/dev/null 2>&1 || {
+						print_warning "Failed to start MailHog container. Continuing anyway..."
+					}
+				fi
+			fi
+		fi
+
+		# Generate unused test server port
+		print_header "Starting test server..."
+		TEST_PORT=$(find_unused_port)
+
+		# Start test server
+		PORT=$TEST_PORT DATABASE_URL="$DB_URL" node "$BUILD_DIR/server.bundle.js" 2>&1 | tee >(sed -E "$strip_pattern" > "$OUT_DIR/server.log") &
+		SERVER_PID=$!
+
+		# Ensure server & db cleanup on exit. Overrides any previous EXIT trap, so we need to include db cleanup here too
+		cleanup() {
+			# Clean up server if it was started
+			if [[ -n "$SERVER_PID" ]]; then
+				print_step "Stopping test server..."
+				kill $SERVER_PID 2>/dev/null
+				# Wait a moment for connections to close
+				sleep 1
+			fi
+
+			# Clean up random database if it was created
+			if [[ "$CREATE_RANDOM_DB" == "true" && -n "${DB_NAME:-}" ]]; then
+				print_step "Dropping test database '$DB_NAME'..."
+				# First try to close all connections to the database
+				psql "${BASE_URL}/postgres" -v ON_ERROR_STOP=1 -c "
+					SELECT pg_terminate_backend(pid)
+					FROM pg_stat_activity
+					WHERE datname = '$DB_NAME' AND pid <> pg_backend_pid();
+				" 2>/dev/null || true
+
+				# Then drop the database
+				psql "${BASE_URL}/postgres" -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS \"$DB_NAME\";" 2>/dev/null || true
+			fi
+		}
+		trap cleanup EXIT
+
+		# Wait for server to be ready
+		wait_for_port $TEST_PORT 10
+		print_step "Test server started on port $TEST_PORT"
+	fi
+}
+
+# Run API tests, if requested
+{
+	if [[ "$RUN_API" == "true" ]]; then
+		print_header "Running API tests..."
+		if ! PORT=$TEST_PORT DATABASE_URL="$DB_URL" bun test tests/api/ 2>&1 | tee >(sed -E "$strip_pattern" > "$OUT_DIR/api.log"); then
+			print_error "API tests failed"
+			exit 1
+		else
+			print_step "API tests complete \n"
+		fi
+	fi
+}
+
+# Run GUI tests, if requested
+{
+	if [[ "$RUN_GUI" == "true" ]]; then
+		print_header "\nRunning GUI tests..."
+		GUI_OUT_DIR="$OUT_DIR/gui"
+		mkdir -p "$GUI_OUT_DIR"
+
+		# Select config based on fast mode
+		PLAYWRIGHT_CONFIG="tests/playwright.cfg.ts"
+		if [[ "$FAST_MODE" == "true" ]]; then
+			PLAYWRIGHT_CONFIG="tests/playwright-fast.cfg.ts"
+			print_step "Using fast Playwright configuration (Chrome only)"
+		fi
+
+		if ! OUT_DIR="$GUI_OUT_DIR" PLAYWRIGHT_TEST_DIR="./gui" PORT=$TEST_PORT DATABASE_URL="$DB_URL" \
+			pnpm exec playwright test --config=$PLAYWRIGHT_CONFIG --pass-with-no-tests 2>&1 | \
+			tee >(sed -E "$strip_pattern" > "$GUI_OUT_DIR/consolidated.log"); then
+
+			print_error "GUI tests failed"
+			exit 1
+		else
+			print_step "GUI tests complete"
+		fi
+	fi
+}
+
+# Run E2E tests, if requested
+{
+	if [[ "$RUN_E2E" == "true" ]]; then
+		print_header "\nRunning E2E tests..."
+		echo
+		E2E_OUT_DIR="$OUT_DIR/e2e"
+		mkdir -p "$E2E_OUT_DIR"
+
+		# Select config based on fast mode
+		PLAYWRIGHT_CONFIG="tests/playwright.cfg.ts"
+		if [[ "$FAST_MODE" == "true" ]]; then
+			PLAYWRIGHT_CONFIG="tests/playwright-fast.cfg.ts"
+			print_step "Using fast Playwright configuration (Chrome only)"
+		fi
+
+		if ! OUT_DIR="$E2E_OUT_DIR" PLAYWRIGHT_TEST_DIR="./e2e" PORT=$TEST_PORT DATABASE_URL="$DB_URL" \
+			pnpm exec playwright test --config=$PLAYWRIGHT_CONFIG --pass-with-no-tests 2>&1 | \
+			tee >(sed -E "$strip_pattern" > "$E2E_OUT_DIR/consolidated.log"); then
+
+			print_error "E2E tests failed"
+			exit 1
+		else
+			print_step "E2E tests complete"
+		fi
+	fi
+}
+
+print_header "\nAll tests completed"

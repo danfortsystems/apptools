@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+
+# Specify the .env file path (default is `.env`)
+ENV_FILE="./.env"
+
+if [ ! -f "$ENV_FILE" ]; then # The .env file does not exist
+  echo "Warning: Env file $ENV_FILE not found, skipping env augmentation"
+else
+	# Load each variable in the .env file
+	while IFS= read -r line; do
+		# Skip empty lines and comments
+		if [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]]; then
+			continue
+		fi
+
+		# Skip lines without = 
+		if [[ ! "$line" =~ = ]]; then
+			continue
+		fi
+
+		# Split on first = only
+		key="${line%%=*}"
+		value="${line#*=}"
+
+		# Trim whitespace from key only
+		key=$(echo "$key" | xargs)
+
+		# Remove quotes from value if present
+		if [[ "$value" =~ ^\'(.*)\'$ ]]; then
+            value="${BASH_REMATCH[1]}"
+        elif [[ "$value" =~ ^\"(.*)\"$ ]]; then
+            value="${BASH_REMATCH[1]}"
+        fi
+
+		# Validate key name (must be valid shell variable name)
+		if [[ ! "$key" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+			continue
+		fi
+
+		# Always export the value from .env file
+		export "$key=$value"
+	done < "$ENV_FILE"
+fi
+

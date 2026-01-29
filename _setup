@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+
+cd ./build && chmod +x project deps build test serve dev deploy _db.sh && cd ..

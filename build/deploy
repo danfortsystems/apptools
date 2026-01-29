@@ -1,0 +1,254 @@
+#!/usr/bin/env bash
+
+# Builds code & db, tests & tags code, and then deploys the app to Render.com
+# An optional --service-name parameter can be used to specify the target Render service (default is picked from package.json)
+# An optional --update-level parameter can be used to specify repo update level: "patch" (default), "minor", or "major"
+# Requires that the setup.sh script has been run first to set up the tooling commands
+
+# Terminate script if a command exits with a non-zero status.
+set -e
+
+source ./tools/_utils.sh
+
+# Default arguments
+SERVICE_NAME=$(node -p "require('./package.json').name" | sed 's/[^a-z0-9-]//g' | tr '[:upper:]' '[:lower:]')
+UPDATE_LEVEL="patch"
+RENDER_SERVICE_TYPE="web" # Can be "web" or "static"
+BUILD_DIR="dist"
+
+# Parse script arguments
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+	--service-name)
+		SERVICE_NAME="$2"
+		shift 2
+		;;
+	--service-type)
+		RENDER_SERVICE_TYPE="$2"
+		shift 2
+		;;
+	--update-level)
+		UPDATE_LEVEL="$2"
+		shift 2
+		;;
+	--build-dir)
+		BUILD_DIR="$2"
+		shift 2
+		;;
+	*)
+		echo "Usage: $0 [--service-name <render_service_name>] [--service-type <web|static>] [--update-level <patch|minor|major>] [--build-dir <build_directory>]"
+		exit 1
+		;;
+	esac
+done
+
+# Validate update level
+if [[ ! "$UPDATE_LEVEL" =~ ^(patch|minor|major)$ ]]; then
+	echo "Invalid version level. Use 'patch', 'minor', or 'major'."
+	exit 1
+fi
+
+# Validate service type
+if [[ ! "$RENDER_SERVICE_TYPE" =~ ^(web|static)$ ]]; then
+	echo "Invalid service type. Use 'web' or 'static'."
+	exit 1
+fi
+
+# print_header "Deploying $UPDATE_LEVEL update to Render service '$SERVICE_NAME' ($RENDER_SERVICE_TYPE)"
+
+# Create build directory
+print_header "Creating build directory: $BUILD_DIR..."
+mkdir -p "$BUILD_DIR"
+
+# Build code and db directly to build directory using production database URL
+print_header "Building directly to build directory..."
+./tools/build --dest "$BUILD_DIR" --db-url "$DATABASE_URL"
+
+# Run tests (keeping db file for deployment)
+print_header "Running tests..."
+if [ -n "$DATABASE_URL" ]; then
+	./tools/test --keep-db-file --build-dir "$BUILD_DIR" --db-url "$DATABASE_URL"
+else
+	print_warning "DATABASE_URL not set, skipping database tests"
+	./tools/test --keep-db-file --build-dir "$BUILD_DIR"
+fi
+
+# Bump pkg version according to update level arg (will also create a matching tag)
+print_header "Updating package version"
+npm version "$UPDATE_LEVEL"
+PACKAGE_VERSION=$(node -p "require('./package.json').version")
+print_step "New version: $PACKAGE_VERSION"
+
+# Push git repository (including tags) to the main remote
+print_header "Pushing to git repository"
+git push origin main --follow-tags
+
+# Create package.json for Render to use
+print_header "Creating Render Deployment Package"
+cat >"$BUILD_DIR/package.json" <<EOF
+{
+	"name": "$SERVICE_NAME",
+	"version": "$PACKAGE_VERSION",
+	"engines": {
+		"node": "22.x"
+	},
+	"scripts": {
+		"start": "if [ \"$RENDER_SERVICE_TYPE\" = \"web\" ]; then node server.bundle.js; else echo 'Static site - no server needed'; fi",
+		"build": "./tools/build --dest dist"
+	},
+	"dependencies": {
+		"pg": "8.16.3"
+	},
+	"devDependencies": {
+		"@danfortsys/fxui": "file:../../libraries/fxui",
+		"@danfortsys/http": "file:../../libraries/http",
+		"@danfortsys/loggr": "file:../../libraries/loggr",
+		"@danfortsys/msgx": "file:../../libraries/msgx",
+		"@danfortsys/rad": "file:../../libraries/rad",
+		"@danfortsys/standard": "file:../../libraries/standard",
+		"@danfortsys/storage": "file:../../libraries/storage"
+	}
+}
+EOF
+
+# Create render.yaml for Render configuration
+cat >"$BUILD_DIR/render.yaml" <<EOF
+# Render Service Configuration
+services:
+  - type: $RENDER_SERVICE_TYPE
+    name: $SERVICE_NAME
+    envNodeVersion: "22"
+    env: []
+    repo: https://github.com/danfortsystems/airkeys.git
+    branch: main
+    rootDir: products/airkeys/$BUILD_DIR
+
+    # Build settings
+    buildCommand: |
+      npm ci
+      npm run build
+
+    # Start command
+    startCommand: |
+      if [ "$RENDER_SERVICE_TYPE" = "web" ]; then
+        npm start
+      fi
+
+    # Health check
+    healthCheck:
+      path: /
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+    # Environment variables (Render will add these automatically)
+    # DATABASE_URL
+    # OBJECT_STORAGE_ACCESS_KEY_ID
+    # OBJECT_STORAGE_ACCESS_KEY_SECRET
+    # OBJECT_STORAGE_ROOT_URL
+    # OBJECT_STORAGE_BUCKET
+    # OBJECT_STORAGE_REGION
+    # SMTP_USERNAME
+    # SMTP_PASSWORD
+    # SMTP_HOST
+    # SMTP_PORT
+    # TWILIO_ACCOUNT_SID
+    # TWILIO_AUTH_TOKEN
+    # STRIPE_SECRET_KEY
+    # STRIPE_PUBLISHABLE_KEY
+    # PAYSTACK_SECRET_KEY
+    # AUTH_IDS_FOR_DEVS
+    # AUTH_IDS_FOR_ADMINS
+    # AUTH_IDS_FOR_AGENTS
+    # ENCRYPTION_KEY_16_CHAR_ASCII
+
+# Render Environment Variables
+envVars:
+  - key: NODE_ENV
+    value: production
+  - key: APP_VERSION
+    value: $PACKAGE_VERSION
+
+# Automatically add all existing environment variables
+# These will be detected from your local environment
+# and added to the Render service when deployed
+EOF
+
+# Add Render-specific environment variables if they exist
+RENDER_ENV_VARS=(
+	"DATABASE_URL"
+	"OBJECT_STORAGE_ACCESS_KEY_ID"
+	"OBJECT_STORAGE_ACCESS_KEY_SECRET"
+	"OBJECT_STORAGE_ROOT_URL"
+	"OBJECT_STORAGE_BUCKET"
+	"OBJECT_STORAGE_REGION"
+	"SMTP_USERNAME"
+	"SMTP_PASSWORD"
+	"SMTP_HOST"
+	"SMTP_PORT"
+	"TWILIO_ACCOUNT_SID"
+	"TWILIO_AUTH_TOKEN"
+	"STRIPE_SECRET_KEY"
+	"STRIPE_PUBLISHABLE_KEY"
+	"PAYSTACK_SECRET_KEY"
+	"AUTH_IDS_FOR_DEVS"
+	"AUTH_IDS_FOR_ADMINS"
+	"AUTH_IDS_FOR_AGENTS"
+	"ENCRYPTION_KEY_16_CHAR_ASCII"
+)
+
+# Generate environment variables section for render.yaml
+echo "" >> "$BUILD_DIR/render.yaml"
+echo "# Environment Variables to configure in Render Dashboard" >> "$BUILD_DIR/render.yaml"
+echo "# ---------------------------------------------------" >> "$BUILD_DIR/render.yaml"
+for var in "${RENDER_ENV_VARS[@]}"; do
+	if [ -n "${!var}" ]; then
+		echo "# $var: ${!var}" >> "$BUILD_DIR/render.yaml"
+	else
+		echo "# $var: (set this value in Render dashboard)" >> "$BUILD_DIR/render.yaml"
+	fi
+done
+
+# Initialize git repo in the build directory
+print_header "Initializing Build Repository"
+ORIGINAL_DIR=$(pwd)
+
+# Ensure return to original dir on exit
+cleanup_deploy() {
+	cd "$ORIGINAL_DIR" 2>/dev/null || true
+}
+trap cleanup_deploy EXIT
+
+cd "$BUILD_DIR"
+git init
+git add .
+git commit -m "Deployed version $PACKAGE_VERSION"
+
+print_step "Done"
+
+# Set git remote for GitHub and push
+print_header "Pushing to GitHub"
+git remote add origin "https://github.com/danfortsystems/airkeys.git"
+git push -u origin main --force
+print_step "Done"
+
+# Clean up temporary build artifacts
+print_header "Cleaning Up"
+cd "$ORIGINAL_DIR"
+rm -rf "$BUILD_DIR"
+print_step "Done"
+
+print_header "Deployment preparation complete"
+echo "To deploy to Render:"
+echo "1. Push your render.yaml to your GitHub repository"
+echo "2. Go to https://dashboard.render.com/"
+echo "3. Connect your GitHub repository"
+echo "4. Create a new Service from GitHub"
+echo "5. Select the '$SERVICE_NAME' service with '$RENDER_SERVICE_TYPE' type"
+echo "6. Set the environment variables listed in render.yaml"
+echo "7. Deploy your service"
+
+print_header "Deployed version: $PACKAGE_VERSION"
+echo "Render service name: $SERVICE_NAME"
+echo "Service type: $RENDER_SERVICE_TYPE"
+echo "Build directory: $BUILD_DIR"

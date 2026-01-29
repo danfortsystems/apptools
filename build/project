@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+
+# Exit immediately if a command exits with a non-zero status
+set -euo pipefail
+
+# Enable debugging output to trace commands.
+# set -x
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+LTGRAY='\033[0;37m'
+DKGRAY='\033[1;30m'
+BOLD='\033[1m'
+ITALIC='\033[3m'
+NOCOL='\033[0m'
+
+# Validate arguments
+if [ -z "$1" ]; then
+	echo -e "${RED}Usage: action [arguments]${NOCOL}"
+	exit 1
+fi
+
+# Parse args to construct command
+action="$1"
+shift  # Remove 1st arg (action) from the args list
+command="$action"
+for arg in "$@"; do
+	command="${command} $arg"
+done
+
+# Inject environment variables
+source ./tools/_env.sh
+
+# Set log directory, file path, and command, based on the action
+TIMESTAMP=$(date +"%s__%Y-%m-%d__%I-%M-%S_%p")
+if [ "$action" = "test" ]; then
+	LOG_DIRECTORY="./logs/$action/$TIMESTAMP"
+    LOG_FILE_PATH="./${LOG_DIRECTORY}/consolidated.log"
+	command="${command} --log-dir ${LOG_DIRECTORY}"
+else
+	LOG_DIRECTORY="./logs/$action"
+    LOG_FILE_PATH="./${LOG_DIRECTORY}/${TIMESTAMP}.$action.log"
+fi
+
+# Create the log directory, if it does not exist
+mkdir -p "$LOG_DIRECTORY"
+
+# Set color codes to be stripped out of log
+strip_pattern="s/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[mGKABCDHJKSfn]//g"
+
+# Run the command
+echo -e "\n${YELLOW}STARTING ${ITALIC}$action${NOCOL}"
+start_timestamp=$(date +%s)
+
+
+# Run the command and log output while keeping logs safe from interruptions:
+# - The main command (./tools/${command}) is still interruptible by SIGINT (Ctrl+C)
+# - 'tee' is run in a subshell that ignores SIGINT, SIGHUP, and SIGPIPE, so log writing continues
+# - Output is also piped through 'sed' to strip ANSI escape sequences before writing to the log file
+# - This ensures logs are complete and readable even if the user cancels the test or the terminal closes
+( ./tools/${command} 2>&1 | (trap '' SIGINT SIGHUP SIGPIPE; tee >(sed -E "$strip_pattern" > "$LOG_FILE_PATH")) )
+# (./tools/${command} 2>&1 | tee -p >(sed -E "$strip_pattern" > "$LOG_FILE_PATH"))
+
+end_timestamp=$(date +%s)
+seconds=$((end_timestamp-start_timestamp))
+
+# Report completion
+echo -e "${GREEN}\nFINISHED ${ITALIC}$action${NOCOL}${GREEN} in ${seconds}s${NOCOL}"

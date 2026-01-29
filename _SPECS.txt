@@ -1,0 +1,267 @@
+AppTools: Specifications
+-------------------------------------------------------
+Updated: January 28, 2026
+Version: 0.1.0
+
+OVERVIEW
+	AppTools is a standardized, configuration-driven Node.js command-line interface (CLI) for orchestrating common development and project management tasks within the monorepo. It replaces project-specific shell scripts with a single, unified tool, ensuring consistency and simplifying maintenance.
+
+	The CLI operates under the primary command `project`, which is executed from the root of a target project (e.g., a product in the `/products` folder). It reads a mandatory `apptools.config.json` file within that project to get the specific settings required to perform commands like `setup`, `build`, `test`, etc.
+
+	This document provides the technical specifications for the AppTools CLI.
+
+SYSTEM ARCHITECTURE
+
+	Components
+		- CLI Entry Point: The main executable (`project`) responsible for initial argument parsing and dispatching to the correct command module. Written in TypeScript.
+		- Command Modules: Separate TypeScript modules for each command (`setup`, `deps`, `build`, `dev`, `serve`, `test`). Each module contains the logic for its specific task.
+		- Configuration Loader: A module responsible for finding, validating, and providing the `apptools.config.json` settings to the command modules.
+		- Service Manager: A utility for managing external services required for development and testing, such as databases and containers (e.g., Podman), based on the project's configuration.
+		- Process Orchestrator: A utility for running external processes (like `tsc`, `esbuild`, `pnpm`, `playwright`) and managing their output and lifecycle, replicating the functionality of `_run.sh`.
+		- Shared Libraries: Utilizes the monorepo's shared libraries (`@danfortsys/standard`, `@danfortsys/loggr`, etc.) for common tasks like logging and error handling.
+
+	Prerequisites
+		- Node.js (via Bun.js runtime)
+		- pnpm (for package management)
+		- Podman (for local container management)
+		- A valid `apptools.config.json` file in the target project's root.
+
+	Execution Context
+		The CLI is designed to be executed from the root directory of a target project. It implicitly determines the current project context by reading the .env file and possibly a configuration file in the current working directory. All paths in the configuration are resolved relative to the project root.
+
+COMMAND LINE INTERFACE
+
+	Global Command: `project`
+		The primary command for all AppTools operations.
+
+		Usage
+			project <command> [options]
+
+	Commands
+
+		`setup`
+			Usage
+				project setup
+
+			Arguments/Options
+				None.
+
+			Behavior/Remarks
+				A meta-command that orchestrates a full project setup. It is designed to prepare a project for development or testing from a clean state. It performs the following actions in sequence:
+				1. Executes the `project deps` command with default options to install all dependencies.
+				2. Upon successful completion of `deps`, executes the `project build` command with default options.
+
+			Example
+				# From the root of 'products/airkeys'
+				project setup
+
+		`deps`
+			Usage
+				project deps [--reset <targets>] [--install <targets>]
+
+			Arguments/Options
+				- `--reset <targets>`: A comma-separated list of dependency targets to "reset" (e.g., delete `node_modules`, drop a database, remove containers).
+				- `--install <targets>`: A comma-separated list of targets to install.
+
+			Behavior/Remarks
+				Manages all project dependencies as defined in `apptools.config.json`.
+				- Reads dependency targets (e.g., `js`, `db`, `containers`) from the `dependencies` section of the config.
+				- For each target, the config specifies the shell commands or actions for `reset` and `install` operations.
+				- Handles interactive prompts for destructive operations (e.g., confirming a database drop).
+				- If no flags are provided, it performs an `install` on all defined targets.
+				- If `--reset` is used, it also implicitly performs an `install` on the reset targets.
+
+			Example
+				# Install all dependencies for the current project
+				project deps
+
+				# Reset the database and containers, then install everything
+				project deps --reset db,containers
+
+		`build`
+			Usage
+				project build [--dest <path>] [--only <app|db>] [--db-reset-ok]
+
+			Arguments/Options
+				- `--dest <path>`: Specifies the output directory for build artifacts. Overrides `build.outputDir` from the config.
+				- `--only <app|db>`: Builds only the application code (`app`) or only the database scripts (`db`).
+				- `--db-reset-ok`: Allows a database reset if a manual migration script is not found and the schema is out of sync.
+
+			Behavior/Remarks
+				Builds the project by type-checking, bundling code, and preparing database scripts.
+				- Follows the build steps defined in the `build` section of `apptools.config.json`.
+				- Executes type-checking, copies static assets, and bundles code using `esbuild`.
+				- Implements the database migration logic from the `airkeys` project: generates `db.init.sql` and a conditional `db.migrate.sql` based on schema comparison.
+
+			Example
+				# Run a full build
+				project build
+
+				# Build only the database migration scripts
+				project build --only db
+
+		`dev`
+			Usage
+				project dev [serve_options]
+
+			Arguments/Options
+				- Inherits all options from the `serve` command (e.g., `--port`, `--db-url`).
+
+			Behavior/Remarks
+				Starts a development server that automatically rebuilds and restarts on file changes.
+				- Watches source directories defined in `dev.watchPaths`.
+				- On change, triggers `project build`.
+				- After a successful build, triggers `project serve`, managing the server process lifecycle.
+
+			Example
+				# Start the development server on a custom port
+				project dev --port 3001
+
+		`start`
+			Usage
+				project serve [--port <port>] [--db-url <url>]
+
+			Arguments/Options
+				- `--port <port>`: Port for the server to listen on.
+				- `--db-url <url>`: Database connection URL.
+
+			Behavior/Remarks
+				Prepares the environment and starts the project.
+				1. Verifies the server bundle exists.
+				2. Runs and then deletes the `db.migrate.sql` script if it exists.
+				3. Ensures required local services (containers) are running as defined in `serve.requiredServices` and `services`.
+				4. Kills any process on the target port before starting the new server.
+				5. Runs the server bundle with `node`.
+
+			Example
+				# Start the server on the default port
+				project serve
+
+		`test`
+			Usage
+				project test [--only <types>] [--no-db-create] [--fast]
+
+			Arguments/Options
+				- `--only <types>`: Comma-separated list of test types to run (e.g., `units,api`).
+				- `--no-db-create`: Uses the main development database instead of creating a temporary one.
+				- `--fast`: Passthrough flag for faster test execution (e.g., for Playwright).
+
+			Behavior/Remarks
+				Runs the project's test suite, managing a full test environment.
+				- For integration tests, it creates/drops a temporary database, starts services, and starts/stops the app server.
+				- Executes different test commands based on the test types defined in the `test.types` config section.
+				- Manages cleanup of all resources (server process, test database) on exit.
+
+			Example
+				# Run all tests
+				project test
+
+				# Run only unit and api tests
+				project test --only units,api
+
+CONFIGURATION
+
+	The `apptools.config.json` file, located at the root of a target project, defines all project-specific parameters for the CLI commands. The following sections outline its structure.
+
+	Root Structure
+		{
+			"projectName": "airkeys",
+			"version": "1.0.0",
+			"paths": {
+				"source": "./source",
+				"buildOutput": "./dist",
+				"logs": "./logs"
+			},
+			"dependencies": { ... },
+			"build": { ... },
+			"serve": { ... },
+			"dev": { ... },
+			"test": { ... },
+			"services": { ... }
+		}
+
+	`dependencies` Section
+		"dependencies": {
+			"js": { "reset": "...", "install": "..." },
+			"db": { "reset": "...", "install": "..." },
+			"containers": { "reset": "...", "install": "..." },
+			"browsers": { "reset": "...", "install": "..." }
+		}
+
+	`build` Section
+		"build": {
+			"typeCheckCommand": "pnpm exec tsc --noEmit",
+			"staticAssets": [
+				{ "from": "./source/client/static/", "to": "./public/" }
+			],
+			"client": { /* esbuild options */ },
+			"server": { /* esbuild options */ },
+			"database": {
+				"schemaSourcePath": "./source/server/dbms",
+				"manualMigrationScript": ".migrate.sql",
+				"initScriptOutput": "db.init.sql",
+				"migrateScriptOutput": "db.migrate.sql"
+			}
+		}
+
+	`serve` Section
+		"serve": {
+			"port": 3000,
+			"serverBundle": "server.bundle.js",
+			"requiredServices": ["minio", "mailhog"]
+		}
+
+	`dev` Section
+		"dev": {
+			"watchPaths": ["./source"]
+		}
+
+	`test` Section
+		"test": {
+			"database": { "testDbPrefix": "test_airkeys_" },
+			"types": {
+				"units": { "command": "bun test tests/unit/" },
+				"api": { "command": "bun test tests/api/" },
+				"gui": {
+					"command": "pnpm exec playwright test --config tests/playwright.cfg.ts",
+					"fastCommand": "pnpm exec playwright test --config tests/playwright-fast.cfg.ts"
+				}
+			}
+		}
+
+	`services` Section
+		"services": {
+			"minio": {
+				"containerName": "minio-airkeys",
+				"image": "minio/minio",
+				"runCommand": "podman run -d ..."
+			},
+			"mailhog": {
+				"containerName": "mailhog-airkeys",
+				"image": "mailhog/mailhog",
+				"runCommand": "podman run -d ..."
+			}
+		}
+
+DEVELOPMENT
+
+	Environment
+		- The AppTools source code is located in `utilities/apptools`.
+		- Development requires Node.js (via Bun.js runtime) and `pnpm`.
+
+	Build
+		- The AppTools project will contain its own `build` script in its `package.json` to compile its TypeScript source code using `tsc`.
+
+	Testing
+		- Unit tests for the CLI's internal logic will be written using the Bun.js test framework.
+		- Test files will be located in `utilities/apptools/tests`.
+
+	Deployment
+		- The CLI will be defined as a binary in its `package.json`.
+		- `pnpm install` at the monorepo root will link this binary into the root `node_modules/.bin` directory, making the `project` command globally available throughout the monorepo workspace.
+
+FUTURE COMMANDS
+
+	`forge`
+		Description
+			A planned command for idempotent code generation. It will read a specification file and (re)generate source code files, such as API clients, database types, or UI components, without overwriting manual changes.

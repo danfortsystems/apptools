@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+
+# Create apptools directory in user bin
+mkdir -p ~/.local/bin/apptools
+
+# Make build tools executable and copy them to apptools directory
+cd ./build && chmod +x project deps build test serve dev deploy && \
+cp project build test serve dev deploy _db.sh ~/.local/bin/apptools/ && cd ..
+
+# Add apptools directory to PATH in both .bashrc and .zshrc if not already there
+add_to_path() {
+    local file="$1"
+    if [ -f "$file" ] && ! grep -q "export PATH.*apptools" "$file"; then
+        echo "" >> "$file"
+        echo "# Add apptools to PATH" >> "$file"
+        echo 'export PATH="$HOME/.local/bin/apptools:$PATH"' >> "$file"
+        echo "Added apptools to PATH in $file"
+        return 0
+    elif [ ! -f "$file" ]; then
+        echo "Warning: $file not found"
+        return 1
+    else
+        echo "apptools already in PATH in $file"
+        return 2
+    fi
+}
+
+# Update PATH in current shell session
+export PATH="$HOME/.local/bin/apptools:$PATH"
+
+# Add to bashrc if it exists and not already added
+if add_to_path ~/.bashrc; then
+    echo "To use the tools in new bash sessions, source ~/.bashrc"
+fi
+
+# Add to zshrc if it exists and not already added
+if add_to_path ~/.zshrc; then
+    echo "To use the tools in new zsh sessions, source ~/.zshrc"
+fi
+
+echo ""
+echo "Tools have been installed to ~/.local/bin/apptools/"
+echo "You can use them immediately in this session!"
+echo ""
+echo "Available commands:"
+echo "  project - Run project actions"
+echo "  build   - Build the project"
+echo "  test    - Run tests"
+echo "  serve   - Start the server"
+echo "  dev     - Start development mode with file watching"
+echo "  deploy  - Deploy the project"
+echo "  db      - Database management"
