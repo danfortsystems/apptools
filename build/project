@@ -30,7 +30,7 @@ for arg in "$@"; do
 done
 
 # Inject environment variables
-source ./tools/_env.sh
+source _env.sh
 
 # Set log directory, file path, and command, based on the action
 TIMESTAMP=$(date +"%s__%Y-%m-%d__%I-%M-%S_%p")
@@ -50,20 +50,20 @@ mkdir -p "$LOG_DIRECTORY"
 strip_pattern="s/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[mGKABCDHJKSfn]//g"
 
 # Run the command
-echo -e "\n${YELLOW}STARTING ${ITALIC}$action${NOCOL}"
+echo -e "${YELLOW}STARTING ${ITALIC}$action${NOCOL}\n"
 start_timestamp=$(date +%s)
 
 
 # Run the command and log output while keeping logs safe from interruptions:
-# - The main command (./tools/${command}) is still interruptible by SIGINT (Ctrl+C)
+# - The main command (./${command}) is still interruptible by SIGINT (Ctrl+C)
 # - 'tee' is run in a subshell that ignores SIGINT, SIGHUP, and SIGPIPE, so log writing continues
 # - Output is also piped through 'sed' to strip ANSI escape sequences before writing to the log file
 # - This ensures logs are complete and readable even if the user cancels the test or the terminal closes
-( ./tools/${command} 2>&1 | (trap '' SIGINT SIGHUP SIGPIPE; tee >(sed -E "$strip_pattern" > "$LOG_FILE_PATH")) )
-# (./tools/${command} 2>&1 | tee -p >(sed -E "$strip_pattern" > "$LOG_FILE_PATH"))
+( ${command} 2>&1 | (trap '' SIGINT SIGHUP SIGPIPE; tee >(sed -E "$strip_pattern" > "$LOG_FILE_PATH")) )
+# (${command} 2>&1 | tee -p >(sed -E "$strip_pattern" > "$LOG_FILE_PATH"))
 
 end_timestamp=$(date +%s)
 seconds=$((end_timestamp-start_timestamp))
 
 # Report completion
-echo -e "${GREEN}\nFINISHED ${ITALIC}$action${NOCOL}${GREEN} in ${seconds}s${NOCOL}"
+echo -e "${GREEN}\nFINISHED ${ITALIC}$action${NOCOL}${GREEN} in ${seconds}s${NOCOL}\n"

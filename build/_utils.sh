@@ -137,7 +137,7 @@ confirm_action() {
 		return 0
 	fi
 
-	read -p "$message (yes/no): " -r answer
+	read -p "$message Continue? (yes/no): " -r answer
 
 	# Trim leading/trailing whitespace and convert to lowercase
 	answer="$(echo "$answer" | xargs | tr '[:upper:]' '[:lower:]')"
@@ -150,4 +150,11 @@ confirm_action() {
 			return 1
 			;;
 	esac
+}
+
+
+# Check if a URL points to a local service (localhost or 127.0.0.1)
+is_local_url() {
+    local url="$1"
+    [[ "$url" =~ ^https?://(localhost|127\.0\.0\.1)(:|/|$) ]]
 }

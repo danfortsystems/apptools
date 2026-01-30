@@ -1,223 +1,143 @@
-#!/usr/bin/env bun
+#!/usr/bin/env bash
 
-// Main build script, intended to run from root of project
+# Main build script, intended to run from root of project
 
-// Usage:
-//
-// 1. Full (type-check & bundle app code; generate db migration script):
-// ./tools/_run.sh build [--dest <artifacts directory>] [--db-url <db connection url>] [--db-reset-ok]
-//
-// 2. Db only (Generate db migration script):
-// ./tools/_run.sh build --only db [--dest <artifacts directory>] [--db-url <db connection url>] [--db-reset-ok]
-//
-// 3. App only (type-check & bundle app code; db-related args ignored):
-// ./tools/_run.sh build --only app [--dest <artifacts directory>]
+# Usage:
+	# build [--dest <output path>] [--only app|db] [--db-url <postgres db url>] [--db-path <sqlite db path>] [--db-reset-ok]
 
+# Remarks
+	# App build involves typecheckig and bundling client & server app code
+	# Db build involves generating db migration script
 
-//@ts-check
-
-import { parseArgs } from "util"
-import { argv } from 'process'
-
-import { build as esBuild } from 'esbuild'
-import globals from "@esbuild-plugins/node-globals-polyfill"
-import modules from "@esbuild-plugins/node-modules-polyfill"
-
-import { ok, resultify, stdErrorResultCtors, stdPromise, stringify, stringifyError, success } from '@danfortsys/standard'
-import { logErrorHeader, logMessageHeader } from '@danfortsys/loggr'
-
-import { execShellAsync, hasProperValue } from './_utils'
-import { default as buildDB } from "./_dbms"
+# Examples:
+	# build --dest <path> --db-url <url>  -- Full build to a specifed location, with a targeting a specific db url
+	#
+	# build --only db --db-reset-ok -- Db build only to ./dist, a targeting the postgres db at DATABASE_URL and/or sqlite db at  DB_PATH
+	#
+	# build --only app [--dest <path>] -- App only build to a specific output location
+#
 
 
-await (function main() {
+# Set immediate exit on error (including undefined variables, pipelines)
+set -euo pipefail
 
-	return stdPromise
-		.init(resultify(() => extractValidArgs(process.argv.slice(2)))())
+# Load utility functions
+source "$(dirname "$0")/_utils.sh"
 
-		// Type check
-		.then(([{ destPath, dbUrl, dbResetOk, only }]) => {
-			logMessageHeader(`Build started with args: ${stringify({ destPath, dbUrl, dbResetOk, only })}`)
-			return only === 'db' ? ok()
-				: runBuildAction("Type-checking", `pnpm exec tsc --noEmit --pretty`)
-		})
+# Default values
+dest_path="./dist"
+db_url="$DATABASE_URL"
+db_path="$DB_PATH"
+db_reset_ok=false
+only=""
 
-		// Create output directories
-		.then(([{ destPath, dbUrl, dbResetOk, only }, _]) => runBuildAction("Creating directories", `mkdir -p ${destPath}/public`))
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --dest)
+            dest_path="$2"
+            shift 2
+            ;;
+        --db-url)
+            db_url="$2"
+            shift 2
+            ;;
+		--db-path)
+            db_path="$2"
+            shift 2
+            ;;
+        --db-reset-ok)
+            db_reset_ok=true
+            shift
+            ;;
+        --only)
+            only="$2"
+            shift 2
+            if [[ "$only" != "app" && "$only" != "db" ]]; then
+                echo "Error: Invalid --only value: $only. Must be 'app' or 'db'"
+                exit 1
+            fi
+            ;;
+        *)
+            echo "Error: Unknown argument: $1"
+            echo "Usage: build --dest <path> [--db-url <url>] [--db-path <path>] [--db-reset-ok] [--only app|db]"
+            exit 1
+            ;;
+    esac
+done
 
-		// Copy static client files
-		.then(([{ destPath, dbUrl, dbResetOk, only }, _]) => only === 'db' ? ok()
-			: runBuildAction("Staging static files", `cp -R ./source/client/static/* ${destPath}/public/`)
-		)
+# Log build arguments
+print_step "Build started with args: dest=$dest_path, db-url=$db_url, db-path=$db_path, db-reset-ok=$db_reset_ok, only=$only"
 
-		// Build client-side code
-		.then(([{ destPath, dbUrl, dbResetOk, only }, _]) => only === 'db' ? ok()
-			: runBuildAction("Building client", _ => resultify(esBuild({
-				entryPoints: ['./source/client/pages/**/_*.tsx'],
-				outdir: `${destPath}/public`,
+# Create output directories
+mkdir -p "$dest_path/public"
 
-				// Flatten output by using just the file name
-				entryNames: '[name]',
+# Type check (if not db only)
+if [[ "$only" != "db" ]]; then
+    echo "Type-checking..."
+    pnpm exec tsc --noEmit --pretty
+    echo "Type-checking completed"
+fi
 
-				// ES module format to support tree-shaking
-				format: 'esm',
+# Copy static client files (if not db only)
+if [[ "$only" != "db" ]]; then
+    echo "Staging static files..."
+    cp -R ./source/client/static/* "$dest_path/public/"
+    echo "Static files staged"
+fi
 
-				// Target modern JS for smaller bundles
-				target: 'es2020',
+# Build client-side code (if not db only)
+if [[ "$only" != "db" ]]; then
+    echo "Building client..."
+    esbuild --entry-points './source/client/pages/**/_*.tsx' \
+        --outdir "$dest_path/public" \
+        --entry-names '[name]' \
+        --format esm \
+        --target es2020 \
+        --bundle \
+        --platform browser \
+        --sourcemap "$([[ $NODE_ENV == 'prod' ]] && echo 'false' || echo 'true')" \
+        --minify \
+        --keep-names \
+        --splitting \
+        --tree-shaking \
+        --jsx-factory createElement \
+        --jsx-fragment Fragment \
+        --plugins "@esbuild-plugins/node-globals-polyfill,@esbuild-plugins/node-modules-polyfill" \
+        --define "process.env.NODE_ENV=\${NODE_ENV:-development}"
+    echo "Client build completed"
+fi
 
-				bundle: true,
-				platform: 'browser',
-				sourcemap: process.env.NODE_ENV !== 'prod',
+# Build server-side code (if not db only)
+if [[ "$only" != "db" ]]; then
+    echo "Building server..."
+    esbuild --entry-points './source/server/console.ts' \
+        --outfile "$dest_path/server.bundle.js" \
+        --bundle \
+        --format cjs \
+        --target node22 \
+        --platform node \
+        --sourcemap "$([[ $NODE_ENV == 'prod' ]] && echo 'false' || echo 'true')" \
+        --external pg-native,request,yamlparser,bun:sqlite \
+        --define "process.env.NODE_ENV=production"
+    echo "Server build completed"
+fi
 
-				// Aggressively optimize & compress code
-				minify: true,
+# Build database (if not app only)
+if [[ "$only" != "app" ]]; then
+    # Check if we have database configuration from command line arguments or environment variables
+    if [[ -n "$db_url" ]]; then
+        echo "Building PostgreSQL Database..."
+        "$(dirname "$0")/db/postgres.sh" --dest "$dest_path" --db-url "$db_url" --db-reset-ok "$db_reset_ok"
+        echo "PostgreSQL DB build completed"
+    elif [[ -n "$db_path" ]]; then
+        echo "Building SQLite Database..."
+        "$(dirname "$0")/db/sqlite.sh" --dest "$dest_path" --db-path "$db_path" --db-reset-ok "$db_reset_ok"
+        echo "SQLite DB build completed"
+    else
+        print_error "No DB config specified. Use --db-url <url> or --db-path <path>, or set DATABASE_URL / DB_PATH env variables"
+        exit 1
+    fi
+fi
 
-				// Preserve names of functions & classes during minification
-				keepNames: true,
-
-				// Split dynamic import modules into separate chunks
-				splitting: true,
-
-				// Enable aggressive tree-shaking
-				treeShaking: true,
-
-				jsxFactory: 'createElement',
-				jsxFragment: 'Fragment',
-
-				plugins: [
-					// Polyfills Node.js globals like `process`, if needed
-					globals(),
-					// Polyfills Node.js modules like `path`, `buffer`, etc.
-					modules(),
-				],
-				define: {
-					'process.env.NODE_ENV': `"${process.env.NODE_ENV || 'development'}"`
-				}
-			})))
-		)
-
-		// Build server-side code
-		.then(([{ destPath, dbUrl, dbResetOk, only }, _]) => only === 'db' ? ok()
-			: runBuildAction("Building server", _ => resultify(esBuild({
-				entryPoints: ['./source/server/console.ts'],
-				outfile: `${destPath}/server.bundle.js`,
-				bundle: true,
-				format: 'cjs',
-				target: 'node22',
-				platform: 'node',
-				sourcemap: process.env.NODE_ENV !== 'prod',
-				external: ['pg-native', 'request', 'yamlparser', 'bun:sqlite'],
-				define: { 'process.env.NODE_ENV': '"production"' }
-			})))
-		)
-
-		// Build database
-		.then(([{ destPath, dbUrl, dbResetOk, only }, _]) => only === 'app' ? ok()
-			: runBuildAction("Building Db", () => buildDB(destPath, { dbUrl, dbResetOk }))
-		)
-
-		// Create version/commit-id file
-		/*writeFileSync(path.join(destPath, 'version.json'), stringify({
-			version: '1.0.0',
-			buildDate: new Date().toISOString()
-		}))*/
-
-		.done()
-
-		.then(buildResult => buildResult.type === "failure"
-			? (/*logWarning(stringifyError(buildResult.error)),*/ logErrorHeader(`Build Failed`), process.exit(1))
-			: (logMessageHeader('Build Completed Successfully'))
-		)
-		.catch(error => {
-			logErrorHeader(stringifyError(error))
-			process.exit(1)
-		})
-
-})()
-
-
-/** Parse/Validate/Extract arguments */
-function extractValidArgs(rawArgs = argv.slice(2)) {
-	const { values: { dest: destPath, "db-url": dbUrl, "db-reset-ok": dbResetOk, only }, positionals } = (() => {
-		try {
-			const result = parseArgs({
-				args: rawArgs,
-				options: {
-					dest: {
-						type: "string",
-						default: "./dist",
-					},
-					"db-url": {
-						type: 'string',
-						default: process.env.DATABASE_URL,
-					},
-					"db-reset-ok": {
-						type: 'boolean',
-						default: false,
-					},
-					only: {
-						type: 'string',
-					}
-				},
-
-				// Enforce strict argument parsing
-				strict: true,
-
-				// Allow positional arguments
-				allowPositionals: false
-			})
-
-			// Validate only parameter if provided
-			if (result.values.only && result.values.only !== 'app' && result.values.only !== 'db') {
-				throw new Error(`Invalid --only value: ${result.values.only}. Must be 'app' or 'db'`)
-			}
-
-			return result
-		}
-		catch (error) {
-			throw new Error([
-				`Error parsing arguments: ${stringifyError(error)}`,
-				'Usage: build --dest <artifacts folder path> [--db-url url] [--db-reset-ok] [--only app|db]'
-			].join('\n'))
-		}
-	})()
-
-	return { destPath, dbUrl, dbResetOk, only }
-}
-
-/** Run build action
- * @param {string} heading Header log message
- * @param {BuildAction} action Action to perform
- * @returns {Promise<import("@danfortsys/standard").Result<any>>}
- */
-async function runBuildAction(heading, action) {
-	console.log(`${heading}...`)
-
-	/** @type {() => Promise<import("@danfortsys/standard").Result<any, import("@danfortsys/standard").StdError>>} */
-	const fn = ((typeof action === 'string')
-		? () => Promise.resolve(execShellAsync(action))
-			.then(_ => success())
-			.catch(err => stdErrorResultCtors.general({
-				description: stringifyError(err)
-			}))
-
-		: action
-	)
-
-	return fn().then(result => (result.type === "success"
-		? console.log(`Done ${heading}`)
-		: console.error([`${heading} failed`, stringifyError(result.error)]
-			.filter(hasProperValue).join(': ')),
-
-		result
-	))
-}
-
-/** @typedef {string | ((...args: any[]) => Promise<import("@danfortsys/standard").Result>)} BuildAction */
-
-
-/*function getLogFilePath() {
-	const timestamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').split('.')[0]
-	mkdirSync(path.resolve('./logs/build'), { recursive: true })
-	return path.resolve(`./logs/build/${timestamp}.log`)
-}*/
+print_step "Build completed successfully"

@@ -89,8 +89,8 @@ source ./tools/_utils.sh
 							RUN_E2E=true
 							;;
 						*)
-							echo "Unknown test type: $test_type"
-							echo "Supported types: units, api, gui, e2e"
+							print_error "Unknown test type: $test_type"
+							print_error "Supported types: units, api, gui, e2e"
 							exit 1
 							;;
 					esac
@@ -98,9 +98,9 @@ source ./tools/_utils.sh
 				shift 2
 				;;
 			*)
-				echo "Unknown argument: $1"
-				echo "Usage: test [--db-url <url>] [--no-db-create] [--build-dir <directory>] [--keep-db-file] [--log-dir <directory>] [--only <test-types>] [--fast]"
-				echo "Test types: units, api, gui, e2e (comma-separated)"
+				print_error "Unknown argument: $1"
+				print_error "Usage: test [--db-url <url>] [--no-db-create] [--build-dir <directory>] [--keep-db-file] [--log-dir <directory>] [--only <test-types>] [--fast]"
+				print_error "Test types: units, api, gui, e2e (comma-separated)"
 				exit 1
 				;;
 		esac

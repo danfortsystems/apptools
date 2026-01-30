@@ -32,6 +32,10 @@ else
             value="${BASH_REMATCH[1]}"
         fi
 
+		# Expand $HOME or ~ in the value
+		value="${value/#\~/$HOME}"
+		value="${value/\$HOME/$HOME}"
+		
 		# Validate key name (must be valid shell variable name)
 		if [[ ! "$key" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
 			continue

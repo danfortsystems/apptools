@@ -13,18 +13,18 @@
 	#	<targets> is a comma-separated list of targets to re-install (reset + install)
 
 # Remarks:
-	#	Valid targets include: js (node packages), db (database: postgres, sqlite, etc), containers (Podman containers running local services for testing, such as minIO object storage and mailHog SMTP), and browsers (for Playwright UI testing)
+	#	Valid targets include: js (node packages), db (database: postgres, SQLite, etc), containers (Podman containers running local services for testing, such as MinIO object storage and MailHog SMTP), and browsers (for Playwright UI testing)
 
 	#	Reset involves: For Node js packages, deleting the package manager modules folder and lock files; For the DB, dropping it and creating a new DB with the same name; For the containers, stopping and removing them; For the browsers, removing their installed cache.
 
 	#	Install involves: For Node js packages, installing with the package manager; For the db, creating the main "public" schema if it does not exist; For the containers, creating them from the relevant images with the relevant arguments (unless they already exist); For the browsers, installing them again.
 
-	# Actions are only taken when there are env variables present that support them. For example, the abscence of DTATABASE_URL env variable would cause reset or install for postgres dbs to be skipped. Likewise LOCAL_DB_PATH controls sqilte dbs reset/install, PLAYWRIGHT_BROWSERS_PATH controls Playwright testing browsers reset/install, etc
+	# Actions are only taken when there are env variables present that support them. For example, the absence of DATABASE_URL env variable would cause reset or install for postgres dbs to be skipped. Likewise DB_PATH controls sqlite dbs reset/install, PLAYWRIGHT_BROWSERS_PATH controls Playwright testing browsers reset/install, etc
 	
 # Examples:
 	#	deps					# Install all dependencies (no reset)
 	#	deps --reset			# Re-install all dependency targets
-	#	deps --reset db			# Re-install db only (rest + install)
+	#	deps --reset db			# Reset db only; then install all dependency targets
 	#	deps --reset db,js		# Reinstall db and js; Install all other targets
 	#	deps --reset all		# Re-install all dependency targets (same as --reset)
 #
@@ -35,6 +35,14 @@ set -euo pipefail
 
 # Load utility functions
 source "$(dirname "$0")/_utils.sh"
+
+# Container names (generic for all projects)
+# Using generic names allows multiple projects to share the same containers
+# Isolation is achieved through:
+# - MinIO: Different buckets per project (via OBJECT_STORAGE_BUCKET env var)
+# - MailHog: Per-project isolation using MSG_FROM_EMAIL_ADDRESS in email headers
+minIoContainerName="minio"
+mailHogContainerName="mailhog"
 
 # Main dependency targets
 DEPS_TARGETS=("js" "db" "containers" "browsers")
@@ -57,7 +65,8 @@ main() {
 				fi
 				;;
 			*)
-				shift
+				print_error "Unknown option: $1"
+				exit 1
 				;;
 		esac
 	done
@@ -82,8 +91,8 @@ main() {
 	fi
 
 	# print_header "Dependency management command"
-	print_step "Reset targets: ${targets_reset[*]:-(none)}"
-	print_step "Install targets: ${DEPS_TARGETS[*]}"
+	print_step "Reset targets: $(printf "%s, " "${targets_reset[@]:-(none)}" | sed 's/, $//')"
+	print_step "Install targets: $(printf "%s, " "${DEPS_TARGETS[@]}" | sed 's/, $//')"
 
 	# Reset specified dependencies
 	for target in "${targets_reset[@]}"; do
@@ -95,42 +104,46 @@ main() {
 				;;
 
 			"db")
+				if [[ -z "${DB_PATH:-}" && -z "${DATABASE_URL:-}" ]]; then
+					print_error "Unable to reset DB since neither DATABASE_URL nor DB_PATH env vars are set"
+					exit 1
+				fi
+
 				# Reset sqlite DB if possible
-				if [[ -z "$DB_PATH" ]]; then
-					print_warning "DB_PATH env variable is not set; Skipping local Sqlite DB reset"
-				else
-					print_header "Resetting database \"$DB_PATH\"..."
-					if confirm_action "The Sqlite DB will be deleted -- data will be permanently destroyed!"; then
-						print_step "Deleting Sqlite DB file $DB_PATH..."
+				if [[ -n "${DB_PATH:-}" ]]; then
+					print_header "Resetting SQLite Db \"$DB_PATH\"..."
+					if confirm_action "The SQLite DB will be deleted -- data will be permanently destroyed!"; then
+						print_step "Deleting SQLite DB file $DB_PATH..."
 						rm -f "$DB_PATH"
-						print_step "Done resetting Sqlite DB"
+						print_step "Done resetting SQLite DB"
 					else
-						print_warning "Sqlite DB reset cancelled"
+						print_warning "SQLite DB reset cancelled"
 					fi
 				fi
 
 				# Reset Postgres DB if possible
-				if [[ -z "$DATABASE_URL" ]]; then
-					print_warning "DATABASE_URL env variable is not set; Skipping Postgres DB reset"
-				else
+				if [[ -n "${DATABASE_URL:-}" ]]; then
+					if ! db_name=$(psql -X -q -Atc 'select current_database()' "$DATABASE_URL") || [[ -z "${db_name//[[:space:]]/}" ]]; then
+						print_error "Could not get Postgres DB name from the DATABASE_URL env variable."
+						exit 1
+					fi
+	
 					print_step "Resetting Postgres DB \"$db_name\"..."
-					local db_name
-					db_name=$(echo "$DATABASE_URL" | sed -n 's|/[^/]*$||; s|^.*/||')
 					if confirm_action "The Postgres DB will be dropped -- data will be permanently destroyed!"; then
 						# Terminate existing connections
 						local sql="SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$db_name' AND pid <> pg_backend_pid()"
-						psql "${DATABASE_URL%/*}" -c "$sql;" >/dev/null 2>&1 || true
+						psql "${DATABASE_URL}" -d postgres -c "$sql;" >/dev/null 2>&1 || true
 
 						# Drop database
 						print_step "Dropping Postgres DB $db_name..."
-						psql "${DATABASE_URL%/*}" -c "DROP DATABASE IF EXISTS '$db_name'" >/dev/null 2>&1 || {
+						psql "${DATABASE_URL}" -d postgres -c "DROP DATABASE IF EXISTS \"$db_name\"" >/dev/null 2>&1 || {
 							print_error "Failed to drop Postgres DB"
 							exit 1
 						}
 
 						# Create database
 						print_step "Creating Postgres DB $db_name..."
-						psql "${DATABASE_URL%/*}" -c "CREATE DATABASE '$db_name'" >/dev/null 2>&1 || {
+						psql "${DATABASE_URL}" -d postgres -c "CREATE DATABASE \"$db_name\"" >/dev/null 2>&1 || {
 							print_error "Failed to create Postgres DB"
 							exit 1
 						}
@@ -140,35 +153,42 @@ main() {
 						print_warning "Postgres DB reset cancelled"
 					fi
 				fi
-
 				;;
 			
 			"containers")
-				if [[ -z "$OBJECT_STORAGE_ROOT_URL" ]]; then
-					print_warning "OBJECT_STORAGE_ROOT_URL env variable not set to localhost; Skipping local object storage container reset"
+				if [[ -z "${OBJECT_STORAGE_ROOT_URL:-}" ]] || ! is_local_url "${OBJECT_STORAGE_ROOT_URL}"; then
+					print_warning "OBJECT_STORAGE_ROOT_URL env variable not set to local url; Skipping local object storage container reset"
 				else
-					print_step "Resetting local service containers..."
-					if [[ "$(uname)" != "linux" ]]; then
-						checkPodmanMachine
-					fi
-					# Remove container if it exists
-					if podman ps -a --format "{{.Names}}" 2>/dev/null | grep -q "^${minIoContainerName}$"; then
-						print_step "Removing MinIO container..."
-						podman rm -f "$minIoContainerName" >/dev/null 2>&1 || true
+					if ! confirm_action "Resetting MinIO local object storage container potentially used by multiple projects."; then
+						print_warning "MinIO local object storage container reset cancelled"
+					else
+						print_step "Resetting MinIO local object storage container..."
+						if [[ "$(uname)" != "linux" ]]; then
+							checkPodmanMachine
+						fi
+						# Remove container if it exists
+						if podman ps -a --format "{{.Names}}" 2>/dev/null | grep -q "^${minIoContainerName}$"; then
+							print_step "Removing MinIO container..."
+							podman rm -f "$minIoContainerName" >/dev/null 2>&1 || true
+						fi
 					fi
 				fi
 
-				if [[ -z "$SMTP_HOST" ]]; then
-					print_warning "SMTP_HOST env variable not set to localhost; Skipping local SMTP container reset"
+				if [[ -z "${SMTP_HOST:-}" ]] || ! is_local_url "${SMTP_HOST}"; then
+					print_warning "SMTP_HOST env variable not set to local url; Skipping local SMTP container reset"
 				else
-					print_step "Resetting local service containers..."
-					if [[ "$(uname)" != "linux" ]]; then
-						checkPodmanMachine
-					fi
-					# Remove container if it exists
-					if podman ps -a --format "{{.Names}}" 2>/dev/null | grep -q "^${mailHogContainerName}$"; then
-						print_step "Removing MailHog container..."
-						podman rm -f "$mailHogContainerName" >/dev/null 2>&1 || true
+					if ! confirm_action "Resetting MailHog local SMTP container potentially used by multiple projects."; then
+						print_warning "MailHog local SMTP container reset cancelled"
+					else
+						print_step "Resetting MailHog local SMTP container..."
+						if [[ "$(uname)" != "linux" ]]; then
+							checkPodmanMachine
+						fi
+						# Remove container if it exists
+						if podman ps -a --format "{{.Names}}" 2>/dev/null | grep -q "^${mailHogContainerName}$"; then
+							print_step "Removing MailHog container..."
+							podman rm -f "$mailHogContainerName" >/dev/null 2>&1 || true
+						fi
 					fi
 				fi
 
@@ -176,11 +196,12 @@ main() {
 				;;
 
 			"browsers")
-				if [[ -z "$PLAYWRIGHT_BROWSERS_PATH" ]]; then
-					print_warning "PLAYWRIGHT_BROWSERS_PATH env variable is not set; Skipping browsers reset"
+				if [[ -z "${PLAYWRIGHT_BROWSERS_PATH:-}" ]]; then
+					print_error "PLAYWRIGHT_BROWSERS_PATH env variable is not set. Cannot Reset Playwright test browsers"
+					exit 1
 				else
-					print_header "Resetting Playwright test browsers..."
-					rm -rf "$PLAYWRIGHT_BROWSERS_PATH"
+					print_header "Resetting Playwright test browsers at ${PLAYWRIGHT_BROWSERS_PATH}..."
+					rm -rf "$PLAYWRIGHT_BROWSERS_PATH" || true
 					print_step "Done resetting Playwright test browsers"
 				fi
 				;;
@@ -205,41 +226,35 @@ main() {
 				;;
 
 			"db")
-				print_header "Installing Databases..."
+				if [[ -z "${DB_PATH:-}" && -z "${DATABASE_URL:-}" ]]; then
+					print_error "Unable to install DB since neither DATABASE_URL nor DB_PATH env vars are set"
+					exit 1
+				fi
 
-				if [[ -z "$DATABASE_URL" ]]; then
-					print_warning "DATABASE_URL env variable not set; Skipping Postgres DB installation"
-				else
-					print_step "Installing Postgres DB..."
-					local psql_cmd
-					psql_cmd=$(getPSqlCmd "CREATE SCHEMA IF NOT EXISTS public")
-					if [[ -n "$psql_cmd" ]]; then
-						eval "$psql_cmd" || {
-							print_error "Failed to create public schema"
-							exit 1
-						}
-					fi
+				if [[ -n "${DATABASE_URL:-}" ]]; then
+					print_header "Installing Postgres DB..."
+					psql "$DATABASE_URL" -c "CREATE SCHEMA IF NOT EXISTS public" >/dev/null 2>&1 || {
+						print_error "Failed to create public schema"
+						exit 1
+					}
 					print_step "Done installing the database"
 				fi
 
-				if [[ -z "$DB_PATH" ]]; then
-					print_warning "DB_PATH env variable is not set; Skipping local Sqlite DB install"
-				else
-					print_step "Installing Sqlite DB \"$DB_PATH\"..."
+				if [[ -n "${DB_PATH:-}" ]]; then
+					print_header "Installing SQLite DB \"$DB_PATH\"..."
 					mkdir -p "$(dirname "$DB_PATH")"
 					sqlite3 "$DB_PATH" ""
 					sqlite3 "$DB_PATH" "VACUUM;"
-					print_step "Done installing Sqlite DB"
+					print_step "Done installing SQLite DB"
 				fi				
 				;;
 
 			"containers")
-				# Install containers
-
-				if [[ -z "$OBJECT_STORAGE_ROOT_URL" ]]; then
-					print_warning "OBJECT_STORAGE_ROOT_URL env variable not set to localhost; Skipping local object storage container install"
+				# Install MinIO container
+				if [[ -z "${OBJECT_STORAGE_ROOT_URL:-}" ]] || ! is_local_url "${OBJECT_STORAGE_ROOT_URL}"; then
+					print_warning "OBJECT_STORAGE_ROOT_URL env variable not set to local url; Skipping local object storage container install"
 				else
-					# Configure MinIO container
+					# Ensure Podman machine is installed and running
 					if [[ "$(uname)" != "linux" ]]; then
 						checkPodmanMachine
 					fi
@@ -280,8 +295,9 @@ main() {
 					print_step "Done installing/configuring MinIO container."
 				fi
 
-				if [[ -z "$OBJECT_STORAGE_ROOT_URL" ]]; then
-					print_warning "SMTP_HOST env variable not set to localhost; Skipping local SMTP container install"
+				# Install MailHog container
+				if [[ -z "${SMTP_HOST:-}" ]] || ! is_local_url "${SMTP_HOST}"; then
+					print_warning "SMTP_HOST env variable not set to local url; Skipping local SMTP container install"
 				else
 					if [[ "$(uname)" != "linux" ]]; then
 						checkPodmanMachine
@@ -297,15 +313,27 @@ main() {
 							exit 1
 						}
 					fi
-					print_step "Done installing/configuring mailHog container"
+
+					podman start "$mailHogContainerName" >/dev/null 2>&1 || {
+						print_error "Could not start MailHog container."
+						exit 1
+					}
+
+					print_step "Waiting for MailHog container to start..."
+					podman wait --condition=healthy "$mailHogContainerName" >/dev/null 2>&1 || {
+						print_error "MailHog container failed to run"
+						exit 1
+					}
+
+					print_step "Done installing/configuring MailHog container"
 				fi
 				;;
 
 			"browsers")
-				if [[ -z "$PLAYWRIGHT_BROWSERS_PATH" ]]; then
+				if [[ -z "${PLAYWRIGHT_BROWSERS_PATH:-}" ]]; then
 					print_warning "PLAYWRIGHT_BROWSERS_PATH env variable is not set; Skipping browsers install"
 				else
-					print_step "Installing Playwright test browsers..."
+					print_header "Installing Playwright test browsers to ${PLAYWRIGHT_BROWSERS_PATH}..."
 					pnpm exec playwright install chromium firefox
 					print_step "Done installing Playwright test browsers"
 				fi
