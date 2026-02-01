@@ -157,12 +157,11 @@ main() {
 			
 			"containers")
 				if [[ -z "${OBJECT_STORAGE_ROOT_URL:-}" ]] || ! is_local_url "${OBJECT_STORAGE_ROOT_URL}"; then
-					print_warning "OBJECT_STORAGE_ROOT_URL env variable not set to local url; Skipping local object storage container reset"
+					print_warning "OBJECT_STORAGE_ROOT_URL env var not set to local url; Skipping local object storage container reset"
 				else
 					if ! confirm_action "Resetting MinIO local object storage container potentially used by multiple projects."; then
 						print_warning "MinIO local object storage container reset cancelled"
 					else
-						print_step "Resetting MinIO local object storage container..."
 						if [[ "$(uname)" != "linux" ]]; then
 							checkPodmanMachine
 						fi
@@ -171,16 +170,16 @@ main() {
 							print_step "Removing MinIO container..."
 							podman rm -f "$minIoContainerName" >/dev/null 2>&1 || true
 						fi
+						print_step "Done resetting MinIO local object storage container"
 					fi
 				fi
 
 				if [[ -z "${SMTP_HOST:-}" ]] || ! is_local_url "${SMTP_HOST}"; then
-					print_warning "SMTP_HOST env variable not set to local url; Skipping local SMTP container reset"
+					print_warning "SMTP_HOST env var not set to local url; Skipping local SMTP container reset"
 				else
 					if ! confirm_action "Resetting MailHog local SMTP container potentially used by multiple projects."; then
 						print_warning "MailHog local SMTP container reset cancelled"
 					else
-						print_step "Resetting MailHog local SMTP container..."
 						if [[ "$(uname)" != "linux" ]]; then
 							checkPodmanMachine
 						fi
@@ -189,10 +188,10 @@ main() {
 							print_step "Removing MailHog container..."
 							podman rm -f "$mailHogContainerName" >/dev/null 2>&1 || true
 						fi
+						print_step "Done resetting MailHog local SMTP container"
 					fi
 				fi
 
-				print_step "Done resetting local service containers"
 				;;
 
 			"browsers")
@@ -232,20 +231,20 @@ main() {
 				fi
 
 				if [[ -n "${DATABASE_URL:-}" ]]; then
-					print_header "Installing Postgres DB..."
+					print_header "Installing the Postgres DB..."
 					psql "$DATABASE_URL" -c "CREATE SCHEMA IF NOT EXISTS public" >/dev/null 2>&1 || {
 						print_error "Failed to create public schema"
 						exit 1
 					}
-					print_step "Done installing the database"
+					print_step "Done installing the Postgres DB"
 				fi
 
 				if [[ -n "${DB_PATH:-}" ]]; then
-					print_header "Installing SQLite DB \"$DB_PATH\"..."
+					print_header "Installing the SQLite DB \"$DB_PATH\"..."
 					mkdir -p "$(dirname "$DB_PATH")"
 					sqlite3 "$DB_PATH" ""
 					sqlite3 "$DB_PATH" "VACUUM;"
-					print_step "Done installing SQLite DB"
+					print_step "Done installing the SQLite DB"
 				fi				
 				;;
 
@@ -254,13 +253,15 @@ main() {
 				if [[ -z "${OBJECT_STORAGE_ROOT_URL:-}" ]] || ! is_local_url "${OBJECT_STORAGE_ROOT_URL}"; then
 					print_warning "OBJECT_STORAGE_ROOT_URL env variable not set to local url; Skipping local object storage container install"
 				else
+					print_header "Installing/configuring MinIO local object storage container..."
 					# Ensure Podman machine is installed and running
 					if [[ "$(uname)" != "linux" ]]; then
 						checkPodmanMachine
 					fi
 
-					if ! podman ps -a --format "{{.Names}}" 2>/dev/null | grep -q "^${minIoContainerName}$"; then
-						print_step "Creating MinIO container..."
+					print_step "Ensuring container exists..."
+					if ! podman container exists "$minIoContainerName"; then
+						print_step "Creating ${minIoContainerName} container..."
 						podman run -d --name "$minIoContainerName" \
 							-p 9000:9000 -p 9001:9001 \
 							-e MINIO_ROOT_USER="$OBJECT_STORAGE_ACCESS_KEY_ID" \
@@ -271,34 +272,47 @@ main() {
 						}
 					fi
 
-					podman start "$minIoContainerName" >/dev/null 2>&1 || {
-						print_error "Could not start MinIO container."
+					if ! podman ps --format "{{.Names}}" 2>/dev/null | grep -q "^${minIoContainerName}$"; then
+						print_step "Starting ${minIoContainerName} container..."
+						podman start "$minIoContainerName" >/dev/null 2>&1 || {
+							print_error "Failed to start container $minIoContainerName"
+							return 1
+						}
+					fi
+
+					# print_step "Ensuring container is started..."
+					# ensure_container_ready "$minIoContainerName" || {
+					# 	print_error "MinIO container failed to start"
+					# 	exit 1
+					# }
+
+					# podman exec "$minIoContainerName" mc alias set local http://localhost:9000 "$OBJECT_STORAGE_ACCESS_KEY_ID" "$OBJECT_STORAGE_ACCESS_KEY_SECRET" >/dev/null 2>&1 || {
+					# 	print_error "Could not configure MinIO container."
+					# 	exit 1
+					# }
+
+					# Set mc alias and wait until it succeeds
+					print_step "Configuring mc alias in MinIO local object storage container..."
+					wait_for_command_in_container "$minIoContainerName" 30 \
+						mc alias set local http://localhost:9000 "$OBJECT_STORAGE_ACCESS_KEY_ID" "$OBJECT_STORAGE_ACCESS_KEY_SECRET" || {
+						print_error "Could not configure MinIO local object storage container."
 						exit 1
 					}
 
-					print_step "Waiting for MinIO container to start..."
-					podman wait --condition=healthy "$minIoContainerName" >/dev/null 2>&1 || {
-						print_error "MinIO container failed to run"
-						exit 1
-					}
-
-					podman exec "$minIoContainerName" mc alias set local http://localhost:9000 "$OBJECT_STORAGE_ACCESS_KEY_ID" "$OBJECT_STORAGE_ACCESS_KEY_SECRET" >/dev/null 2>&1 || {
-						print_error "Could not configure MinIO container."
-						exit 1
-					}
-
+					print_step "Creating bucket in MinIO local object storage container."
 					podman exec "$minIoContainerName" mc mb local/"$OBJECT_STORAGE_BUCKET" --ignore-existing >/dev/null 2>&1 || {
 						print_error "Could not create MinIO bucket."
 						exit 1
 					}
 
-					print_step "Done installing/configuring MinIO container."
+					print_step "Done installing/configuring MinIO local object storage container."
 				fi
 
 				# Install MailHog container
 				if [[ -z "${SMTP_HOST:-}" ]] || ! is_local_url "${SMTP_HOST}"; then
 					print_warning "SMTP_HOST env variable not set to local url; Skipping local SMTP container install"
 				else
+					print_header "Installing/configuring MailHog local SMTP container..."
 					if [[ "$(uname)" != "linux" ]]; then
 						checkPodmanMachine
 					fi
@@ -314,18 +328,12 @@ main() {
 						}
 					fi
 
-					podman start "$mailHogContainerName" >/dev/null 2>&1 || {
-						print_error "Could not start MailHog container."
+					ensure_container_ready "$mailHogContainerName" "ss -ltn | grep :1025" "30" || {
+						print_error "MailHog container failed to become ready"
 						exit 1
 					}
 
-					print_step "Waiting for MailHog container to start..."
-					podman wait --condition=healthy "$mailHogContainerName" >/dev/null 2>&1 || {
-						print_error "MailHog container failed to run"
-						exit 1
-					}
-
-					print_step "Done installing/configuring MailHog container"
+					print_step "Done installing/configuring MailHog local SMTP container"
 				fi
 				;;
 

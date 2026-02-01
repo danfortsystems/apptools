@@ -44,13 +44,13 @@ done
 
 # Validate update level
 if [[ ! "$UPDATE_LEVEL" =~ ^(patch|minor|major)$ ]]; then
-	echo "Invalid version level. Use 'patch', 'minor', or 'major'."
+	print_error "Invalid version level. Use 'patch', 'minor', or 'major'."
 	exit 1
 fi
 
 # Validate service type
 if [[ ! "$RENDER_SERVICE_TYPE" =~ ^(web|static)$ ]]; then
-	echo "Invalid service type. Use 'web' or 'static'."
+	print_error "Invalid service type. Use 'web' or 'static'."
 	exit 1
 fi
 
@@ -239,16 +239,16 @@ rm -rf "$BUILD_DIR"
 print_step "Done"
 
 print_header "Deployment preparation complete"
-echo "To deploy to Render:"
-echo "1. Push your render.yaml to your GitHub repository"
-echo "2. Go to https://dashboard.render.com/"
-echo "3. Connect your GitHub repository"
-echo "4. Create a new Service from GitHub"
-echo "5. Select the '$SERVICE_NAME' service with '$RENDER_SERVICE_TYPE' type"
-echo "6. Set the environment variables listed in render.yaml"
-echo "7. Deploy your service"
+print_step "To deploy to Render:"
+print_step "1. Push your render.yaml to your GitHub repository"
+print_step "2. Go to https://dashboard.render.com/"
+print_step "3. Connect your GitHub repository"
+print_step "4. Create a new Service from GitHub"
+print_step "5. Select the '$SERVICE_NAME' service with '$RENDER_SERVICE_TYPE' type"
+print_step "6. Set the environment variables listed in render.yaml"
+print_step "7. Deploy your service"
 
 print_header "Deployed version: $PACKAGE_VERSION"
-echo "Render service name: $SERVICE_NAME"
-echo "Service type: $RENDER_SERVICE_TYPE"
-echo "Build directory: $BUILD_DIR"
+print_step "Render service name: $SERVICE_NAME"
+print_step "Service type: $RENDER_SERVICE_TYPE"
+print_step "Build directory: $BUILD_DIR"

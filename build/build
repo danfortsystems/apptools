@@ -26,8 +26,8 @@ source "$(dirname "$0")/_utils.sh"
 
 # Default values
 dest_path="./dist"
-db_url="$DATABASE_URL"
-db_path="$DB_PATH"
+db_url="${DATABASE_URL:-}"
+db_path="${DB_PATH:-}"
 db_reset_ok=false
 only=""
 
@@ -54,13 +54,13 @@ while [[ $# -gt 0 ]]; do
             only="$2"
             shift 2
             if [[ "$only" != "app" && "$only" != "db" ]]; then
-                echo "Error: Invalid --only value: $only. Must be 'app' or 'db'"
+                print_error "Invalid --only value: $only. Must be 'app' or 'db'"
                 exit 1
             fi
             ;;
         *)
-            echo "Error: Unknown argument: $1"
-            echo "Usage: build --dest <path> [--db-url <url>] [--db-path <path>] [--db-reset-ok] [--only app|db]"
+            print_error "Unknown argument: $1"
+            print_error "Usage: build --dest <path> [--db-url <url>] [--db-path <path>] [--db-reset-ok] [--only app|db]"
             exit 1
             ;;
     esac
@@ -74,70 +74,42 @@ mkdir -p "$dest_path/public"
 
 # Type check (if not db only)
 if [[ "$only" != "db" ]]; then
-    echo "Type-checking..."
+    print_header "Type-checking..."
     pnpm exec tsc --noEmit --pretty
-    echo "Type-checking completed"
+    print_step "Done type-checking"
+fi
+
+# Build client and server code using esbuild config (if not db only)
+if [[ "$only" != "db" ]]; then
+    print_header "Building client and server..."
+    DEST="$dest_path" NODE_ENV="${NODE_ENV:-development}" node esbuild.config.js
+    print_step "Done building client and server"
 fi
 
 # Copy static client files (if not db only)
 if [[ "$only" != "db" ]]; then
-    echo "Staging static files..."
+    print_header "Staging static files..."
     cp -R ./source/client/static/* "$dest_path/public/"
-    echo "Static files staged"
-fi
-
-# Build client-side code (if not db only)
-if [[ "$only" != "db" ]]; then
-    echo "Building client..."
-    esbuild --entry-points './source/client/pages/**/_*.tsx' \
-        --outdir "$dest_path/public" \
-        --entry-names '[name]' \
-        --format esm \
-        --target es2020 \
-        --bundle \
-        --platform browser \
-        --sourcemap "$([[ $NODE_ENV == 'prod' ]] && echo 'false' || echo 'true')" \
-        --minify \
-        --keep-names \
-        --splitting \
-        --tree-shaking \
-        --jsx-factory createElement \
-        --jsx-fragment Fragment \
-        --plugins "@esbuild-plugins/node-globals-polyfill,@esbuild-plugins/node-modules-polyfill" \
-        --define "process.env.NODE_ENV=\${NODE_ENV:-development}"
-    echo "Client build completed"
-fi
-
-# Build server-side code (if not db only)
-if [[ "$only" != "db" ]]; then
-    echo "Building server..."
-    esbuild --entry-points './source/server/console.ts' \
-        --outfile "$dest_path/server.bundle.js" \
-        --bundle \
-        --format cjs \
-        --target node22 \
-        --platform node \
-        --sourcemap "$([[ $NODE_ENV == 'prod' ]] && echo 'false' || echo 'true')" \
-        --external pg-native,request,yamlparser,bun:sqlite \
-        --define "process.env.NODE_ENV=production"
-    echo "Server build completed"
+    print_step "Done staging static files"
 fi
 
 # Build database (if not app only)
 if [[ "$only" != "app" ]]; then
     # Check if we have database configuration from command line arguments or environment variables
     if [[ -n "$db_url" ]]; then
-        echo "Building PostgreSQL Database..."
-        "$(dirname "$0")/db/postgres.sh" --dest "$dest_path" --db-url "$db_url" --db-reset-ok "$db_reset_ok"
-        echo "PostgreSQL DB build completed"
+        print_header "Building PostgreSQL DB..."
+        bash "$(dirname "$0")/db/postgres.sh" --dest "$dest_path" --db-url "$db_url" $( [[ "$db_reset_ok" == true ]] && echo "--db-reset-ok" )
+        print_step "PostgreSQL DB build completed"
     elif [[ -n "$db_path" ]]; then
-        echo "Building SQLite Database..."
-        "$(dirname "$0")/db/sqlite.sh" --dest "$dest_path" --db-path "$db_path" --db-reset-ok "$db_reset_ok"
+        print_header "Building SQLite DB..."
+
+        bash "$(dirname "$0")/db/sqlite.sh" --dest "$dest_path" --db-path "$db_path" $( [[ "$db_reset_ok" == true ]] && echo "--db-reset-ok" )
         echo "SQLite DB build completed"
     else
-        print_error "No DB config specified. Use --db-url <url> or --db-path <path>, or set DATABASE_URL / DB_PATH env variables"
+        print_error "Can't build DB -- no target config specified."
+        print_step "Use --db-url <url> or --db-path <path>, or set DATABASE_URL / DB_PATH env variables."
         exit 1
     fi
 fi
 
-print_step "Build completed successfully"
+# print_step "Build completed successfully"

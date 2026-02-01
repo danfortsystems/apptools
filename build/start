@@ -1,75 +1,107 @@
 #!/usr/bin/env bash
 
-# Local server start script
-# Usage: <runner> serve [--db-url <url>] [--port <port#>], where <runner> is one of:
-#	pnpm run (if `pnpm run setup` has been run to setup tooling commands)
-#	./tools/_run.sh (to run the command directly from the project root)
-#
-# Options:
-#   --db-url <url>	Database connection URL (overrides DATABASE_URL env var)
-#   --port <port#>	Port number for the server (overrides PORT env var)
-#
-# Examples:
-#   ./tools/_run.sh serve				# Start server with env vars
-#   pnpm run serve --db-url "postgres://localhost:5432/mydb"	# Use custom database
-#   pnpm run serve --port 3000			# Use custom port
-#   pnpm run serve --db-url "postgres://localhost:5432/mydb" --port 8080
+# Starts the local server with specified database configuration
 
-source ./tools/_utils.sh
+# Usage:
+	# start [--db-url <postgres url>] [--db-path <sqlite path>] [--port <port#>]
+
+# Remarks:
+	# The script defaults the --db-url or --db-path argument to the DATABASE_URL/DB_PATH env vars respectively. If neither the arg nor env var is passed/set, the script will raise an error and exit.
+	# Server bundle must exist at ./dist/server.bundle.cjs
+	# Database migration is run if ./dist/db.migrate.sql exists
+
+# Examples:
+	# start --db-url "postgres://localhost:5432/mydb" --port 3000
+	# start --db-path "./data/myapp.db" --port 3000
+#
+
+# Set immediate exit on error (including undefined variables, pipelines)
+set -euo pipefail
+
+# Load utility functions
+source "$(dirname "$0")/_utils.sh"
 
 # Default to environment variables
-DB_URL="$DATABASE_URL"
-SERVER_PORT="$PORT"
+DB_URL="${DATABASE_URL:-}"
+DB_PATH="${DB_PATH:-}"
+SERVER_PORT="${PORT:-}"
 
-# Get arguments and override defaults
+# Server bundle path
+SERVER_BUNDLE="./dist/server.bundle.cjs"
+
+
+# Parse command line arguments
 while [[ $# -gt 0 ]]; do
-	case $1 in
-		--db-url)
-			DB_URL="$2"
-			shift 2
-			;;
-		--port)
-			SERVER_PORT="$2"
-			shift 2
-			;;
-		*)
-			echo "Unknown argument: $1"
-			echo "Usage: serve [--db-url <url>] [--port <port#>]"
-			exit 1
-			;;
-	esac
+    case $1 in
+        --db-url)
+            DB_URL="$2"
+            shift 2
+            ;;
+        --db-path)
+            DB_PATH="$2"
+            shift 2
+            ;;
+        --port)
+            SERVER_PORT="$2"
+            shift 2
+            ;;
+        *)
+            print_error "Unknown argument: $1"
+            print_error "Usage: start [--db-url <url>] [--db-path <path>] [--port <port#>]"
+            exit 1
+            ;;
+    esac
 done
 
-# Validate arguments
-if [[ -z "$DB_URL" ]]; then
-	print_error "Neither --db-url argument nor DATABASE_URL environment variable is set"
-	exit 1
-fi
-if [[ -z "$SERVER_PORT" ]]; then
-	print_error "Neither --port argument nor PORT environment variable is set"
-	exit 1
+# Validate database configuration
+if [[ -z "$DB_URL" && -z "$DB_PATH" ]]; then
+    print_error "Neither database URL nor path specified."
+    print_error "Use --db-url <url> or --db-path <path>, or set DATABASE_URL / DB_PATH environment variables."
+    exit 1
 fi
 
-print_header "Serve started with args: db url=$DB_URL, port=$SERVER_PORT"
+# Validate port
+if [[ -z "$SERVER_PORT" ]]; then
+    print_error "Neither --port argument nor PORT environment variable is set"
+    exit 1
+fi
+
+# Log start arguments
+print_step "Start arguments:"
+if [[ -n "$DB_URL" ]]; then
+	print_step "PostgreSQL DB URL: $DB_URL"
+elif [[ -n "$DB_PATH" ]]; then
+	print_step "SQLite DB path: $DB_PATH"
+fi
+print_step "Server port: ${SERVER_PORT}\n"
 
 # Check if server bundle exists
-if [[ ! -f "./dist/server.bundle.js" ]]; then
-	print_error "Server bundle not found at ./dist/server.bundle.js. Please run 'airkeys build' first."
+if [[ ! -f "$SERVER_BUNDLE" ]]; then
+	print_error "Server bundle not found at $SERVER_BUNDLE. Please run 'airkeys build' first."
 	exit 1
 fi
 
 # Run built db script if present
 DB_SCRIPT="./dist/db.migrate.sql"
-if [[ -f "$DB_SCRIPT" ]]; then	
+if [[ -f "$DB_SCRIPT" ]]; then
 	print_step "Running init/migration script '$DB_SCRIPT' on DB"
-	
-	if psql "$DB_URL" -v ON_ERROR_STOP=1 -v schema=public -f "$DB_SCRIPT"; then
-		# Delete db script if it ran successfully
-		rm "$DB_SCRIPT"
-	else
-		print_error "Database migration failed. Aborting server start."
-		exit 1
+
+	if [[ -n "$DB_URL" ]]; then
+		# PostgreSQL
+		if ! psql "$DB_URL" -v ON_ERROR_STOP=1 -v schema=public -f "$DB_SCRIPT"; then
+			print_error "PostgreSQL database migration failed. Aborting server start."
+			exit 1
+		fi
+	elif [[ -n "$DB_PATH" ]]; then
+		# SQLite
+		if ! sqlite3 "$DB_PATH" < "$DB_SCRIPT"; then
+			print_error "SQLite database migration failed. Aborting server start."
+			exit 1
+		fi
 	fi
+
+	# Delete db script if it ran successfully
+	rm "$DB_SCRIPT"
 fi
 
 # Kill any existing process using the target port
@@ -82,7 +114,7 @@ if [[ -n "$EXISTING_PID" ]]; then
 fi
 
 # Start MinIO if using local object storage
-if [[ -n "$OBJECT_STORAGE_ROOT_URL" ]] && [[ "$OBJECT_STORAGE_ROOT_URL" =~ localhost|127\.0\.0\.1 ]]; then
+if [[ -n "${OBJECT_STORAGE_ROOT_URL:-}" ]] && [[ "$OBJECT_STORAGE_ROOT_URL" =~ localhost|127\.0\.0\.1 ]]; then
 	print_step "Ensuring MinIO (local object storage) is running..."
 
 	# Start podman machine if not running
@@ -157,5 +189,9 @@ if [[ -n "${SMTP_HOST:-}" ]] && [[ "$SMTP_HOST" =~ localhost|127\.0\.0\.1 ]]; th
 	fi
 fi
 
-# Start server
-DATABASE_URL=$DB_URL PORT=$SERVER_PORT node ./dist/server.bundle.js
+# Start server with appropriate database configuration
+if [[ -n "$DB_URL" ]]; then
+	DATABASE_URL=$DB_URL PORT=$SERVER_PORT node "$SERVER_BUNDLE"
+elif [[ -n "$DB_PATH" ]]; then
+	DB_PATH=$DB_PATH PORT=$SERVER_PORT node "$SERVER_BUNDLE"
+fi

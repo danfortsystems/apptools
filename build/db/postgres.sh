@@ -13,10 +13,9 @@
 
 # Remarks:
 	#	Generates two SQL scripts: db.init.sql (full schema) and db.migrate.sql (safe for running on existing data)
-	#	Compares existing database schema against SQL scripts in ./source/server/db/
-	#	If differences are found, creates migration script or fails (unless --db-reset-ok)
-	#	Works with SQL files prefixed with numbers (e.g., 001_create_tables.sql)
-
+	#	Compares existing database schema (if it has data) against SQL scripts in ./source/server/dbms/
+	#	If differences are found, copies migration script to output (if it exists) or fails (unless --db-reset-ok is passed)
+	#	Works with SQL files prefixed with numbers (e.g., _0.types.sql, _1.tables.sql)
 # Examples:
 	#	postgres.sh --dest ./dist				# Build to ./dist using DATABASE_URL
 	#	postgres.sh --dest ./dist --db-reset-ok	# Allow reset of existing database
@@ -30,9 +29,12 @@ set -euo pipefail
 # Load utility functions
 source "$(dirname "$0")/../_utils.sh"
 
+# Load common database functions
+source "$(dirname "$0")/_db_common.sh"
+
 # Default values
 dest_folder_path="./dist"
-db_url="$DATABASE_URL"
+db_url="${DATABASE_URL:-}"
 db_reset_ok=false
 
 # Parse command line arguments
@@ -52,7 +54,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             print_error "Unknown argument: $1"
-            echo "Usage: postgres.sh --dest <destination> [--db-url url] [--db-reset-ok]"
+            print_error "Usage: postgres.sh --dest <destination> [--db-url url] [--db-reset-ok]"
             exit 1
             ;;
     esac
@@ -61,7 +63,7 @@ done
 # Validate required arguments
 if [[ -z "$dest_folder_path" ]]; then
     print_error "Destination folder path is required"
-    echo "Usage: postgres.sh --dest <destination> [--db-url url] [--db-reset-ok]"
+    print_error "Usage: postgres.sh --dest <destination> [--db-url url] [--db-reset-ok]"
     exit 1
 fi
 
@@ -74,7 +76,7 @@ fi
 # Define paths
 init_script_path="$dest_folder_path/db.init.sql"
 migra_script_path="$dest_folder_path/db.migrate.sql"
-schema_scripts_folder_path="./source/server/db"
+schema_scripts_folder_path="./source/server/dbms"
 src_migra_script_path="$schema_scripts_folder_path/.migrate.sql"
 schema_name="public"
 
@@ -92,73 +94,13 @@ if [[ ! -d "$schema_scripts_folder_path" ]]; then
     exit 1
 fi
 
-# Get sorted SQL script paths with proper numeric prefix sorting
-get_sorted_script_paths() {
-    local scripts_folder="$1"
-    local files=()
 
-    # Find all SQL files except migration script
-    while IFS= read -r -d $'\0' file; do
-        files+=("$file")
-    done < <(find "$scripts_folder" -name "*.sql" ! -name ".migrate.sql" -print0)
 
-    # Sort by numeric prefix in filename
-    printf "%s\n" "${files[@]}" | awk '{
-        match($0, /^(_?)([0-9]+)/, arr)
-        num = (arr[2] == "") ? 999 : arr[2]
-        printf "%04d %s\n", num, $0
-    }' | sort -n | cut -d' ' -f2- | grep -v '^$'
-}
-
-# Generate db init script (always)
-create_init_script() {
-    local -n ordered_script_paths=$1
-    local output_script_path="$2"
-
-    print_step "Generating PostgreSQL db init script..."
-
-    # Create preamble with placeholder
-    echo "SET search_path TO :schema;" > "$output_script_path"
-
-    # Append each SQL file with marker
-    for script_path in "${ordered_script_paths[@]}"; do
-        local file_name=$(basename "$script_path")
-        echo -e "\n-- FILE: $file_name\n-- PATH: $script_path" >> "$output_script_path"
-        cat "$script_path" >> "$output_script_path"
-    done
-
-    echo -e "\n" >> "$output_script_path"
-    print_step "Done generating PostgreSQL db init script"
-}
-
-# Check if PostgreSQL schema has data
-postgres_schema_has_data() {
-    local schema="$1"
-    local db_url="$2"
-
-    # Check if any tables exist
-    local tables_query="SELECT table_name FROM information_schema.tables WHERE table_schema = '$schema' AND table_type = 'BASE TABLE'"
-    local tables=$(psql "$db_url" -t -c "$tables_query")
-
-    if [[ -z "$tables" ]]; then
-        return 1
-    fi
-
-    # Check each table for data
-    while IFS= read -r table_name; do
-        if [[ -n "$table_name" ]]; then
-            local count_query="SELECT EXISTS(SELECT 1 FROM \"$schema\".\"$table_name\" LIMIT 1) as has_rows"
-            local has_rows=$(psql "$db_url" -t -c "$count_query")
-            if [[ "$has_rows" = "t" ]]; then
-                return 0
-            fi
-        fi
-    done <<< "$tables"
-
-    return 1
-}
-
-# Execute SQL query for PostgreSQL
+# Execute SQL query on Postgres
+	# Runs a single SQL query against the database with connection test
+	# Args:
+	#   $1: SQL query to execute
+	#   $2: PostgreSQL database connection URL
 exec_postgres_query() {
     local query="$1"
     local db_url="$2"
@@ -169,10 +111,20 @@ exec_postgres_query() {
         exit 1
     fi
 
-    psql "$db_url" -t -c "$query"
+    # Use -X -q -A -t for machine-safe output:
+    # -X: ignore .psqlrc
+    # -q: quiet mode (no notices/warnings)
+    # -A: unaligned output (no extra formatting)
+    # -t: tuples only (no headers/footers)
+    psql "$db_url" -X -q -A -t -c "$query"
 }
 
-# Execute SQL script for PostgreSQL
+# Execute SQL script on Postgres
+	# Runs a SQL script file against the database with proper flags
+	# Args:
+	#   $1: Path to SQL script file to execute
+	#   $2: Schema name to use
+	#   $3: PostgreSQL database connection URL
 exec_postgres_script() {
     local script_path="$1"
     local schema="$2"
@@ -180,21 +132,62 @@ exec_postgres_script() {
 
     psql "$db_url" \
         -X \
+        -q \
         -P pager=off \
         -v ON_ERROR_STOP=1 \
         -v schema="$schema" \
         -f "$script_path"
 }
 
+# Check if PostgreSQL schema has data
+	# Returns 0 if schema has data in any table, 1 if schema has no data
+	# Args:
+	#   $1: Schema name to check
+	#   $2: PostgreSQL database connection URL
+postgres_schema_has_data() {
+    local schema="$1"
+    local db_url="$2"
+
+    # Check if any tables exist
+    local tables_query="SELECT table_name FROM information_schema.tables WHERE table_schema = '$schema' AND table_type = 'BASE TABLE'"
+    local tables=$(exec_postgres_query "$tables_query" "$db_url")
+
+    if [[ -z "$tables" ]]; then
+        return 1
+    fi
+
+    # Check each table for data
+    # Note: psql -t output has leading/trailing whitespace, which must be trimmed
+    # Otherwise table names become invalid (e.g., " messages" instead of "messages")
+    while IFS= read -r table_name; do
+        table_name=$(echo "$table_name" | xargs)  # Trim whitespace
+        if [[ -n "$table_name" ]]; then
+            local count_query="SELECT EXISTS(SELECT 1 FROM \"$schema\".\"$table_name\" LIMIT 1)"
+            local has_rows=$(exec_postgres_query "$count_query" "$db_url")
+            if [[ "$has_rows" = "t" ]]; then
+                return 0
+            fi
+        fi
+    done <<< "$tables"
+
+    return 1
+}
+
 # Check if database is local
+	# Determines if PostgreSQL database connection is to a local server
+	# Args:
+	#   $1: PostgreSQL database connection URL
+	# Returns:
+	#   0 if database is local
+	#   1 if database is remote
 is_local_database() {
     local db_url="$1"
 
-    # Extract hostname from URL
-    local hostname=$(echo "$db_url" | grep -oP '://[^:@]+(?::\d+)?@[^:/]+' | cut -d@ -f2 | cut -d: -f1)
+    # Extract hostname from URL using pure bash + sed (no grep -P for macOS compatibility)
+    hostname=$(echo "$db_url" | sed -E 's|.*@([^:/]+).*|\1|')
 
     if [[ -z "$hostname" ]]; then
-        hostname=$(echo "$db_url" | grep -oP '//([^:@]+)(?::\d+)?' | cut -d/ -f3 | cut -d: -f1)
+        hostname=$(echo "$db_url" | sed -E 's|.*//([^:/]+).*|\1|')
     fi
 
     local local_hosts=("localhost" "127.0.0.1" "::1" "0.0.0.0")
@@ -245,7 +238,7 @@ compare_schemas() {
 
     # Compare tables
     if [[ "$tables1" != "$tables2" ]]; then
-        echo "Schema differences detected in table structures:"
+        print_step "Schema differences detected in table structures:"
         echo "--- Schema1 ($schema1) tables ---"
         echo "$tables1"
         echo "--- Schema2 ($schema2) tables ---"
@@ -254,26 +247,32 @@ compare_schemas() {
     fi
 
     # Check views
-    local views1=$(psql "$db_url" -t -c "SELECT view_name, view_definition FROM information_schema.views WHERE table_schema = '$schema1'" | grep -v '^$' | sort)
-    local views2=$(psql "$db_url" -t -c "SELECT view_name, view_definition FROM information_schema.views WHERE table_schema = '$schema2'" | grep -v '^$' | sort)
+    local views1=$(psql "$db_url" -t -c "SELECT table_name, view_definition FROM information_schema.views WHERE table_schema = '$schema1'" | grep -v '^$' | sort)
+    local views2=$(psql "$db_url" -t -c "SELECT table_name, view_definition FROM information_schema.views WHERE table_schema = '$schema2'" | grep -v '^$' | sort)
 
     if [[ "$views1" != "$views2" ]]; then
-        echo "Schema differences detected in views"
+        print_step "Schema differences detected in views"
         diff_found=true
     fi
 
-    # Check functions (signatures only)
-    local funcs1=$(psql "$db_url" -t -c "SELECT routine_name || '(' || string_agg(parameter_name || ':' || data_type, ',') || ')'
-        FROM information_schema.routines
-        WHERE routine_schema = '$schema1' AND routine_type = 'FUNCTION'
-        GROUP BY routine_name" | grep -v '^$' | sort)
-    local funcs2=$(psql "$db_url" -t -c "SELECT routine_name || '(' || string_agg(parameter_name || ':' || data_type, ',') || ')'
-        FROM information_schema.routines
-        WHERE routine_schema = '$schema2' AND routine_type = 'FUNCTION'
-        GROUP BY routine_name" | grep -v '^$' | sort)
+    # Check functions (signatures only) - using pg_proc for PostgreSQL compatibility
+    local funcs1=$(psql "$db_url" -X -q -A -t -c "
+		SELECT p.proname || '(' ||
+       pg_get_function_identity_arguments(p.oid) || ')'
+		FROM pg_proc p
+		JOIN pg_namespace n ON n.oid = p.pronamespace
+		WHERE n.nspname = '$schema1'
+		ORDER BY 1;")
+    local funcs2=$(psql "$db_url" -X -q -A -t -c "
+		SELECT p.proname || '(' ||
+			pg_get_function_identity_arguments(p.oid) || ')'
+		FROM pg_proc p
+		JOIN pg_namespace n ON n.oid = p.pronamespace
+		WHERE n.nspname = '$schema2'
+		ORDER BY 1;")
 
     if [[ "$funcs1" != "$funcs2" ]]; then
-        echo "Schema differences detected in functions"
+        print_step "Schema differences detected in functions"
         diff_found=true
     fi
 
@@ -286,45 +285,52 @@ compare_schemas() {
         WHERE schemaname = '$schema2'" | grep -v '^$' | sort)
 
     if [[ "$indexes1" != "$indexes2" ]]; then
-        echo "Schema differences detected in indexes"
+        print_step "Schema differences detected in indexes"
         diff_found=true
     fi
 
     [[ "$diff_found" == true ]] && return 1 || return 0
 }
 
-# Create temp schema from scripts
+# Creates a schema and initializes it with SQL scripts
+#
+# Arguments:
+#   $1 (ref): Array of sorted SQL script paths to execute
+#   $2: Name of the schema to create
+#   $3: PostgreSQL database connection URL
+#
+# Behavior:
+#   - Creates a temporary SQL file combining all scripts in order
+#   - Creates the specified schema (does not drop existing)
+#   - Executes the combined script to initialize the schema
+#   - Automatically cleans up temporary files
+#   - Exits with error if any step fails
 create_temp_schema() {
-	local -n ordered_script_paths=$1
+	local -n script_paths=$1
     local schema=$2
     local db_url=$3
-    local temp_script_path
-    # Use mktemp to create a secure temporary file
-    temp_script_path=$(mktemp -t "temp-schema-XXXXXX.sql") || {
+
+    # Create temporary file to hold combined scripts
+    local temp_file
+    temp_file=$(mktemp) || {
         print_error "Failed to create temporary file"
-        exit 1
+        return 1
     }
 
-    # Set up cleanup trap
-    cleanup() {
-        local exit_code=$?
-        rm -f "$temp_script_path" 2>/dev/null || true
-        if [[ "$exit_code" -ne 0 ]]; then
-            print_error "Failed to create/initialize schema '$schema'"
-        fi
-        return $exit_code
-    }
-    trap cleanup EXIT INT TERM
+    # Ensure cleanup happens on exit, interrupt, or termination
+    # trap 'rm -f "$temp_file" 2>/dev/null || true' EXIT INT TERM
+	trap '[[ -n "${temp_file:-}" ]] && rm -f "$temp_file"' EXIT INT TERM
+
 
     # Create temporary init script
-    create_init_script ordered_script_paths "$temp_script_path"
+    create_db_init_script script_paths "$temp_file"
 
     # Create the schema in the db
     print_step "Creating schema \"$schema\"..."
     exec_postgres_query "CREATE SCHEMA \"$schema\";" "$db_url"
     # Initialize schema with the script
     print_step "Initializing schema \"$schema\"..."
-    exec_postgres_script "$temp_script_path" "$schema" "$db_url"
+    exec_postgres_script "$temp_file" "$schema" "$db_url"
 }
 
 # Main build process
@@ -338,7 +344,7 @@ main() {
     local sorted_sql_paths=($(get_sorted_script_paths "$schema_scripts_folder_path"))
 
     # Generate init script
-    create_init_script sorted_sql_paths "$init_script_path"
+    create_db_init_script sorted_sql_paths "$init_script_path"
 
     # Check if schema has data
     if postgres_schema_has_data "$schema_name" "$db_url"; then
@@ -355,18 +361,18 @@ main() {
             print_step "Checking for migration script..."
 
             if [[ -f "$src_migra_script_path" ]]; then
-                echo "Migration script found at $src_migra_script_path."
-                echo "Appending migration script to $migra_script_path..."
+                print_step "Migration script found at $src_migra_script_path."
+                print_step "Appending migration script to $migra_script_path..."
 
                 # Create migration script with placeholder preamble
                 echo "SET search_path TO :schema;" > "$migra_script_path"
                 cat "$src_migra_script_path" >> "$migra_script_path"
             else
-                echo "Migration script not found/readable at $src_migra_script_path."
+                print_step "Migration script not found/readable at $src_migra_script_path."
 
                 if is_local_database "$db_url"; then
                     if [[ "$db_reset_ok" = true ]]; then
-                        echo "Migration script not found, but --db-reset-ok specified"
+                        print_step "Migration script not found, but --db-reset-ok specified"
                         cp "$init_script_path" "$migra_script_path"
                     else
                         echo "Db schema differs from DDL scripts, but migration script not found."
@@ -374,19 +380,19 @@ main() {
                         exit 1
                     fi
                 else
-                    echo "Db schema differs from DDL scripts, but migration script not found."
-                    echo "Cannot reset remote (possibly prod) database."
+                    print_step "Db schema differs from DDL scripts, but migration script not found."
+                    print_step "Cannot reset remote (possibly prod) database."
                     exit 1
                 fi
             fi
         else
-            echo "Existing PostgreSQL Schema is compatible with DDL scripts. Nothing to do."
+            print_step "Existing PostgreSQL Schema is compatible with DDL scripts. Nothing to do."
         fi
 
         # Cleanup temp schema
         exec_postgres_query "DROP SCHEMA IF EXISTS \"$temp_schema\" CASCADE;" "$db_url" || true
     else
-        echo "PostgreSQL schema has no data; can be safely reset"
+        print_step "PostgreSQL schema has no data; can be safely reset"
         cp "$init_script_path" "$migra_script_path"
     fi
 }

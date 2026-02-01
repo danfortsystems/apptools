@@ -4,25 +4,27 @@ set -e
 
 
 # Text formatting (ANSI escape codes for portability)
-bold='\033[1m'
 normal='\033[0m'
+bold='\033[1m'
+italic='\033[3m'
 green='\033[0;32m'
+bold_green='\033[1;32m'
 yellow='\033[0;33m'
+bold_yellow='\033[1;33m'
 blue='\033[0;34m'
+bold_blue='\033[1;34m'
 red='\033[0;31m'
+bold_red='\033[1;31m'
+unitalic='\033[23m'
 
-print_header() {
-	echo -e "${bold}$1${normal}"
-}
-print_step() {
-	echo -e "${normal}$1"
-}
-print_warning() {
-	echo -e "${yellow}$1${normal}" >&2
-}
-print_error() {
-	echo -e "${bold}${red}$1${normal}" >&2
-}
+print_step() { echo -e "${normal}$1"; }
+print_header() { echo -e "${bold}$1${normal}"; }
+print_success() { echo -e "${green}$1${normal}"; }
+print_success_header() { echo -e "${bold_green}$1${normal}"; }
+print_warning() { echo -e "${yellow}$1${normal}" >&2; }
+print_warning_header() { echo -e "${bold_yellow}$1${normal}"; }
+print_error() { echo -e "${red}$1${normal}" >&2; }
+print_error_header() { echo -e "${bold_red}$1${normal}"; }
 
 # Find unused port in 3000–3999 range sequentially
 find_unused_port() {
@@ -74,7 +76,7 @@ checkPodmanMachine() {
 
 	# Ensure Podman machine exists
 	local machine_list
-	machine_list=$(podman machine list --format "{{.Names}}" 2>/dev/null || true)
+	machine_list=$(podman machine list --format "{{.Name}}" 2>/dev/null || true)
 
 	if [[ -z "$machine_list" ]]; then
 		print_step "Creating Podman machine..."
@@ -126,6 +128,140 @@ start_container_if_not_running() {
 	fi
 }
 
+# Ensure container is running and ready (after creation)
+ensure_container_ready_old() {
+	local container_name="$1"
+	local service_check="${2:-}"
+	local timeout="${3:-30}"
+
+	# Ensure container is running
+	start_container_if_not_running "$container_name" || return 1
+
+	# Wait for container to be running
+	podman wait --condition=running "$container_name" >/dev/null 2>&1 || {
+		print_error "Container $container_name failed to start"
+		return 1
+	}
+
+	# Wait for container to be healthy (if health check is available)
+	if podman inspect --format '{{.State.Health}}' "$container_name" >/dev/null 2>&1; then
+		podman wait --condition=healthy "$container_name" >/dev/null 2>&1 || {
+			print_error "Container $container_name failed to become healthy"
+			return 1
+		}
+	fi
+
+	# If service check command is provided, wait for service to be ready
+	if [[ -n "$service_check" ]]; then
+		print_step "Waiting for service in $container_name to be ready..."
+		local start_time=$(date +%s)
+		while true; do
+			if podman exec "$container_name" $service_check 2>/dev/null | grep -q "$service_check"; then
+				break
+			fi
+			local current_time=$(date +%s)
+			if [[ $((current_time - start_time)) -gt $timeout ]]; then
+				print_error "Timeout waiting for service in $container_name to be ready"
+				return 1
+			fi
+			sleep 0.5
+		done
+	fi
+
+	print_step "Container $container_name is ready"
+	return 0
+}
+
+# ensure_container_ready <container_name> [timeout_seconds]
+ensure_container_ready() {
+	local container_name="$1"
+	local timeout="${2:-30}"
+
+	if [[ -z "$container_name" ]]; then
+		echo "ERROR: container name is required" >&2
+		return 1
+	fi
+
+	# 1. Ensure container exists
+	if ! podman container exists "$container_name"; then
+		echo "ERROR: container '$container_name' does not exist" >&2
+		return 1
+	fi
+
+	# 2. Start container if not running
+	local status
+	status=$(podman inspect -f '{{.State.Status}}' "$container_name")
+	if [[ "$status" != "running" ]]; then
+		echo "Starting container '$container_name'..."
+		if ! podman start "$container_name" >/dev/null; then
+			echo "ERROR: failed to start container '$container_name'" >&2
+			return 1
+		fi
+	fi
+
+	# 3. Wait until container process is running
+	local start_time
+	start_time=$(date +%s)
+	while true; do
+		status=$(podman inspect -f '{{.State.Status}}' "$container_name")
+		if [[ "$status" == "running" ]]; then
+			break
+		fi
+		if (( $(date +%s) - start_time >= timeout )); then
+			echo "ERROR: container '$container_name' did not reach running state in $timeout seconds" >&2
+			return 1
+		fi
+		sleep 0.5
+	done
+
+	# 4. Wait until container can execute commands
+	start_time=$(date +%s)
+	while true; do
+		if podman exec "$container_name" true >/dev/null 2>&1; then
+			break
+		fi
+		if (( $(date +%s) - start_time >= timeout )); then
+			echo "ERROR: container '$container_name' exists and is running but cannot execute commands" >&2
+			return 1
+		fi
+		sleep 0.5
+	done
+
+	echo "Container '$container_name' is ready for commands"
+	return 0
+}
+
+
+# wait_for_command_in_container <container_name> <timeout_seconds> <command...>
+wait_for_command_in_container() {
+	local container_name="$1"
+	local timeout="${2:-30}"
+	shift 2
+	local cmd=("$@")
+
+	if [[ -z "$container_name" || ${#cmd[@]} -eq 0 ]]; then
+		echo "ERROR: container name and command are required" >&2
+		return 1
+	fi
+
+	local start_time
+	start_time=$(date +%s)
+
+	while true; do
+		if podman exec "$container_name" "${cmd[@]}" >/dev/null 2>&1; then
+			echo "Command succeeded in container '$container_name'"
+			return 0
+		fi
+
+		if (( $(date +%s) - start_time >= timeout )); then
+			echo "ERROR: command failed in container '$container_name' after $timeout seconds" >&2
+			return 1
+		fi
+
+		sleep 0.5
+	done
+}
+
 
 # Confirm dangerous actions
 	# Args: 1/ Prompt message
@@ -137,7 +273,8 @@ confirm_action() {
 		return 0
 	fi
 
-	read -p "$message Continue? (yes/no): " -r answer
+	echo -ne "${bold}${message} Continue? (yes/no): ${normal}"
+	read -r answer
 
 	# Trim leading/trailing whitespace and convert to lowercase
 	answer="$(echo "$answer" | xargs | tr '[:upper:]' '[:lower:]')"

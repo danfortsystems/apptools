@@ -13,10 +13,9 @@
 
 # Remarks:
 	#	Generates two SQL scripts: db.init.sql (full schema) and db.migrate.sql (safe for running on existing data)
-	#	Checks existing SQLite database for data before creating migration
-	#	If database has data and --db-reset-ok is specified, recreates the database
-	#	If database has data but --db-reset-ok is not specified, creates migration script
-	#	Works with SQL files prefixed with numbers (e.g., 001_create_tables.sql)
+	#	Compares existing database schema (if it has data) against SQL scripts in ./source/server/dbms/
+	#	If differences are found, copies migration script (if it exists) to output or fails (unless --db-reset-ok is passed)
+	#	Works with SQL files prefixed with numbers (e.g., _0.types.sql, _1.tables.sql)
 
 # Examples:
 	#	sqlite.sh --dest ./dist					# Build to ./dist using DB_PATH
@@ -30,6 +29,9 @@ set -euo pipefail
 
 # Load utility functions
 source "$(dirname "$0")/../_utils.sh"
+
+# Load common database functions
+source "$(dirname "$0")/_db_common.sh"
 
 # Default values
 dest_folder_path="./dist"
@@ -57,7 +59,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             print_error "Unknown argument: $1"
-            echo "Usage: sqlite.sh --dest <destination> [--db-path path] [--db-reset-ok]"
+            print_error "Usage: sqlite.sh --dest <destination> [--db-path path] [--db-reset-ok]"
             exit 1
             ;;
     esac
@@ -73,7 +75,7 @@ fi
 # Define paths
 init_script_path="$dest_folder_path/db.init.sql"
 migra_script_path="$dest_folder_path/db.migrate.sql"
-schema_scripts_folder_path="./source/server/db"
+schema_scripts_folder_path="./source/server/dbms"
 src_migra_script_path="$schema_scripts_folder_path/.migrate.sql"
 
 print_step "SQLite Build args: dest=$dest_folder_path, db-path=$db_path, db-reset-ok=$db_reset_ok"
@@ -90,46 +92,12 @@ if [[ ! -d "$schema_scripts_folder_path" ]]; then
     exit 1
 fi
 
-# Get sorted SQL script paths with proper numeric prefix sorting
-get_sorted_script_paths() {
-    local scripts_folder="$1"
-    local files=()
 
-    # Find all SQL files except migration script
-    while IFS= read -r -d $'\0' file; do
-        files+=("$file")
-    done < <(find "$scripts_folder" -name "*.sql" ! -name ".migrate.sql" -print0)
-
-    # Sort by numeric prefix in filename
-    printf "%s\n" "${files[@]}" | awk '{
-        match($0, /^(_?)([0-9]+)/, arr)
-        num = (arr[2] == "") ? 999 : arr[2]
-        printf "%04d %s\n", num, $0
-    }' | sort -n | cut -d' ' -f2- | grep -v '^$'
-}
-
-# Generate db init script (always)
-create_init_script() {
-    local -n ordered_script_paths=$1
-    local output_script_path="$2"
-
-    print_step "Generating SQLite db init script..."
-
-    # SQLite doesn't use schemas, so just create the file
-    > "$output_script_path"
-
-    # Append each SQL file with marker
-    for script_path in "${ordered_script_paths[@]}"; do
-        local file_name=$(basename "$script_path")
-        echo -e "\n-- FILE: $file_name\n-- PATH: $script_path" >> "$output_script_path"
-        cat "$script_path" >> "$output_script_path"
-    done
-
-    echo -e "\n" >> "$output_script_path"
-    print_step "Done generating SQLite db init script"
-}
 
 # Check if SQLite database has data
+# Returns 0 if database has data in any table, 1 if empty or doesn't exist
+# Args:
+#   $1: Path to the SQLite database file
 sqlite_db_has_data() {
     local db_path="$1"
 
@@ -158,51 +126,223 @@ sqlite_db_has_data() {
 }
 
 # Execute SQL query for SQLite
+# Runs a single SQL query against the database
+# Args:
+#   $1: SQL query to execute
+#   $2: Path to the SQLite database file
 exec_sqlite_query() {
     local query="$1"
     local db_path="$2"
     sqlite3 "$db_path" "$query"
 }
-
 # Execute SQL script for SQLite
+# Runs a SQL script file against the database
+# Args:
+#   $1: Path to SQL script file to execute
+#   $2: Path to the SQLite database file
 exec_sqlite_script() {
     local script_path="$1"
     local db_path="$2"
     sqlite3 "$db_path" < "$script_path"
 }
 
+# Create temp database from scripts
+# Creates a temporary SQLite database and initializes it with SQL scripts
+# Args:
+#   $1 (ref): Array of sorted SQL script paths
+#   $2: Path where temporary database should be created
+create_db_from_scripts() {
+
+    local -n ordered_script_paths=$1
+    local temp_db_path="$2"
+    local temp_script_path
+
+    # Use mktemp to create a secure temporary file
+    temp_script_path=$(mktemp -t "temp-db-XXXXXX.sql") || {
+        print_error "Failed to create temporary file"
+        exit 1
+    }
+
+    # Set up cleanup trap
+    cleanup() {
+        [[ -n "${temp_script_path:-}" ]] && rm -f "$temp_script_path" 2>/dev/null || true
+    }
+    trap cleanup EXIT INT TERM
+
+    # Create temporary init script
+    create_db_init_script "$1" "$temp_script_path"
+
+    # Create empty temp database
+    sqlite3 "$temp_db_path" "" || {
+        print_error "Failed to create database"
+        exit 1
+    }
+
+    # Initialize temp database with the script
+    # print_step "Initializing temp database..."
+    sqlite3 "$temp_db_path" < "$temp_script_path"
+}
+
+# Compare SQLite database structures
+# Compares two SQLite databases for differences in tables, indexes, views, and triggers
+# Args:
+#   $1: Path to first SQLite database
+#   $2: Path to second SQLite database
+# Returns:
+#   0 if databases are identical
+#   1 if differences found
+compare_sqlite_schemas() {
+    local db1_path="$1"
+    local db2_path="$2"
+    local diff_found=false
+
+    # Get table names and their structures (table_name:column_name:data_type:position)
+    local get_table_struct="SELECT name, sql
+        FROM sqlite_master
+        WHERE type='table' AND name NOT LIKE 'sqlite_%'
+        ORDER BY name"
+
+    # Get tables and structure from db1
+    local tables1
+    tables1=$(sqlite3 "$db1_path" "$get_table_struct" | sort)
+
+    # Get tables and structure from db2
+    local tables2
+    tables2=$(sqlite3 "$db2_path" "$get_table_struct" | sort)
+
+    # Compare tables
+    if [[ "$tables1" != "$tables2" ]]; then
+        print_step "Schema differences detected in tables:"
+        echo "--- Database 1 tables ---"
+        echo "$tables1"
+        echo "--- Database 2 tables ---"
+        echo "$tables2"
+        diff_found=true
+    fi
+
+    # Get indexes
+    local get_index_struct="SELECT name, sql
+        FROM sqlite_master
+        WHERE type='index' AND tbl_name NOT LIKE 'sqlite_%'
+        ORDER BY name"
+
+    local indexes1
+    indexes1=$(sqlite3 "$db1_path" "$get_index_struct" | sort)
+
+    local indexes2
+    indexes2=$(sqlite3 "$db2_path" "$get_index_struct" | sort)
+
+    # Compare indexes
+    if [[ "$indexes1" != "$indexes2" ]]; then
+        print_step "Schema differences detected in indexes:"
+        echo "--- Database 1 indexes ---"
+        echo "$indexes1"
+        echo "--- Database 2 indexes ---"
+        echo "$indexes2"
+        diff_found=true
+    fi
+
+    # Get views
+    local get_view_struct="SELECT name, sql
+        FROM sqlite_master
+        WHERE type='view' AND name NOT LIKE 'sqlite_%'
+        ORDER BY name"
+
+    local views1
+    views1=$(sqlite3 "$db1_path" "$get_view_struct" | sort)
+
+    local views2
+    views2=$(sqlite3 "$db2_path" "$get_view_struct" | sort)
+
+    # Compare views
+    if [[ "$views1" != "$views2" ]]; then
+        print_step "Schema differences detected in views:"
+        echo "--- Database 1 views ---"
+        echo "$views1"
+        echo "--- Database 2 views ---"
+        echo "$views2"
+        diff_found=true
+    fi
+
+    # Get triggers
+    local get_trigger_struct="SELECT name, sql
+        FROM sqlite_master
+        WHERE type='trigger' AND name NOT LIKE 'sqlite_%'
+        ORDER BY name"
+
+    local triggers1
+    triggers1=$(sqlite3 "$db1_path" "$get_trigger_struct" | sort)
+
+    local triggers2
+    triggers2=$(sqlite3 "$db2_path" "$get_trigger_struct" | sort)
+
+    # Compare triggers
+    if [[ "$triggers1" != "$triggers2" ]]; then
+        print_step "Schema differences detected in triggers:"
+        echo "--- Database 1 triggers ---"
+        echo "$triggers1"
+        echo "--- Database 2 triggers ---"
+        echo "$triggers2"
+        diff_found=true
+    fi
+
+    [[ "$diff_found" == true ]] && return 1 || return 0
+}
+
 # Main build process
+# Orchestrates the SQLite database build process:
+# 1. Generates initialization script from SQL files
+# 2. Checks if database has existing data
+# 3. If data exists, creates temp database and compares schemas
+# 4. Handles migration based on comparison results
 main() {
     local sorted_sql_paths=($(get_sorted_script_paths "$schema_scripts_folder_path"))
 
     # Generate init script
-    create_init_script sorted_sql_paths "$init_script_path"
+	print_step "Creating db init script"
+    create_db_init_script sorted_sql_paths "$init_script_path"
 
     # Check if database has data
     if sqlite_db_has_data "$db_path"; then
-        print_step "SQLite database has data; migration needed"
+        print_step "SQLite database has data; needs structural comparison with scripts"
 
-        # For SQLite, if there's data and --db-reset-ok is specified, recreate
-        if [[ "$db_reset_ok" = true ]]; then
-            print_step "--db-reset-ok specified, recreating SQLite database"
-            rm -f "$db_path"
-            mkdir -p "$(dirname "$db_path")"
-            sqlite3 "$db_path" ""
-        else
-            print_step "SQLite database has data but --db-reset-ok not specified"
-            echo "Will attempt to run migration script if available"
+        local temp_db_path=$(mktemp -t "temp-sqlite-XXXXXX.db") || {
+            print_error "Failed to create temporary file path"
+            exit 1
+        }
+
+        # Create temp database from scripts
+        create_db_from_scripts sorted_sql_paths "$temp_db_path"
+
+        # Compare schemas
+        if ! compare_sqlite_schemas "$db_path" "$temp_db_path"; then
+            print_step "Existing SQLite Schema does not match DDL scripts."
+            print_step "Checking for migration script..."
 
             if [[ -f "$src_migra_script_path" ]]; then
-                echo "Migration script found at $src_migra_script_path."
-                echo "Appending migration script to $migra_script_path..."
+                print_step "Migration script found at $src_migra_script_path."
+                print_step "Appending migration script to $migra_script_path..."
                 cp "$src_migra_script_path" "$migra_script_path"
             else
-                echo "No migration script found, using init script"
-                cp "$init_script_path" "$migra_script_path"
+                print_step "Migration script not found/readable at $src_migra_script_path."
+
+                if [[ "$db_reset_ok" = true ]]; then
+                    print_step "Migration script not found, but --db-reset-ok specified"
+                    cp "$init_script_path" "$migra_script_path"
+                else
+                    print_step "Db schema differs from DDL scripts, but migration script not found."
+                    print_step "Use --db-reset-ok to allow database reset in development."
+                    exit 1
+                fi
             fi
+        else
+            print_step "Existing SQLite Schema is compatible with DDL scripts. Nothing to do."
         fi
+
+        # Cleanup temp database
+        rm -f "$temp_db_path" 2>/dev/null || true
     else
-        echo "SQLite database has no data; can be safely reset"
+        print_step "SQLite database has no data; can be safely reset"
         cp "$init_script_path" "$migra_script_path"
     fi
 }

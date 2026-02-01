@@ -6,18 +6,12 @@ set -euo pipefail
 # Enable debugging output to trace commands.
 # set -x
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-LTGRAY='\033[0;37m'
-DKGRAY='\033[1;30m'
-BOLD='\033[1m'
-ITALIC='\033[3m'
-NOCOL='\033[0m'
+# Load utility functions
+source _utils.sh
 
 # Validate arguments
 if [ -z "$1" ]; then
-	echo -e "${RED}Usage: action [arguments]${NOCOL}"
+	print_error "Usage: action [arguments]"
 	exit 1
 fi
 
@@ -50,20 +44,24 @@ mkdir -p "$LOG_DIRECTORY"
 strip_pattern="s/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[mGKABCDHJKSfn]//g"
 
 # Run the command
-echo -e "${YELLOW}STARTING ${ITALIC}$action${NOCOL}\n"
 start_timestamp=$(date +%s)
+formatted_start_time=$(date -r "$start_timestamp" "+%a, %b %d %Y at %I:%M:%S %p")
+print_warning_header "\nSTARTED ${italic}$action${unitalic} at $formatted_start_time\n"
 
-
-# Run the command and log output while keeping logs safe from interruptions:
-# - The main command (./${command}) is still interruptible by SIGINT (Ctrl+C)
-# - 'tee' is run in a subshell that ignores SIGINT, SIGHUP, and SIGPIPE, so log writing continues
-# - Output is also piped through 'sed' to strip ANSI escape sequences before writing to the log file
-# - This ensures logs are complete and readable even if the user cancels the test or the terminal closes
+# Run the command and capture exit code
+set +e
 ( ${command} 2>&1 | (trap '' SIGINT SIGHUP SIGPIPE; tee >(sed -E "$strip_pattern" > "$LOG_FILE_PATH")) )
-# (${command} 2>&1 | tee -p >(sed -E "$strip_pattern" > "$LOG_FILE_PATH"))
+exit_code=$?
+set -e
 
 end_timestamp=$(date +%s)
 seconds=$((end_timestamp-start_timestamp))
 
-# Report completion
-echo -e "${GREEN}\nFINISHED ${ITALIC}$action${NOCOL}${GREEN} in ${seconds}s${NOCOL}\n"
+# Report completion or failure
+if [ $exit_code -eq 0 ]; then
+    formatted_end_time=$(date -r "$end_timestamp" "+%a, %b %d %Y at %I:%M:%S %p")
+    print_success_header "\nFINISHED ${italic}$action${unitalic} after ${seconds}s\n"
+else
+    print_error_header "\nFAILED ${italic}$action${unitalic} (exit code $exit_code) after ${seconds}s\n"
+    exit $exit_code
+fi
