@@ -7,11 +7,33 @@ set -euo pipefail
 # set -x
 
 # Load utility functions
-source _utils.sh
+source "$(dirname "$0")/_utils.sh"
 
-# Validate arguments
-if [ -z "$1" ]; then
-	print_error "Usage: action [arguments]"
+# Check for help flag
+if [ $# -eq 0 ] || [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+	print_error "Usage: project <action> [arguments]"
+	print_error ""
+	print_error "Available actions:"
+	print_error "build [--dest <path>] [--only app|db] [--db-url <url>] [--db-path <path>] [--db-reset-ok]"
+	print_error "Build the project"
+	print_error ""
+	print_error "deploy [--service-name <name>] [--update-level <level>]"
+	print_error "Deploy the project to Render.com"
+	print_error ""
+	print_error "start [--db-url <url>] [--db-path <path>] [--port <port>]"
+	print_error "Start the server"
+	print_error ""
+	print_error "test [--build-dir <dir>] [--no-db-create] [--db-url <url>] [--keep-db-file] [--log-dir <dir>] [--only <types>] [--fast]"
+	print_error "Run tests"
+	print_error ""
+	print_error "dev [--db-url <url>] [--port <port>]"
+	print_error "Start development mode with file watching"
+	print_error ""
+	print_error "deps [--reset <targets>]"
+	print_error "Manage dependencies"
+	print_error ""
+	print_error "install"
+	print_error "Install the project"
 	exit 1
 fi
 

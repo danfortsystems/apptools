@@ -1,3 +1,0 @@
-#!/usr/bin/env bash
-
-cd ./build && chmod +x project deps build test start dev deploy && cd ..

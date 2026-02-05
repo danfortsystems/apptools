@@ -1,0 +1,201 @@
+#!/bin/sh
+set -eu
+
+# Load utility functions
+source "$(dirname "$0")/_utils.sh"
+
+command_exists() { command -v "$1" >/dev/null 2>&1; }
+
+#######################################
+# Help
+#######################################
+
+show_help() {
+  cat <<EOF
+Usage:
+  install.sh --app NAME [options]
+
+Required:
+  --app NAME                Application / command name
+
+Optional:
+  --source PATH|URL         Local directory or HTTP(S)/FTP tarball URL
+                            Default:
+                              https://github.com/danfortsystems/NAME/archive/refs/heads/main.tar.gz
+  --target DIR              Install directory
+                            Default: ~/.local/share/NAME
+  --bin-dir DIR             Directory for symlink
+                            Default: ~/.local/bin
+  --no-symlink              Do not create symlink
+  --help                    Show this help
+
+Designed for:
+  curl -fsSL <url> | sh -s -- --app NAME
+EOF
+}
+
+#######################################
+# Defaults
+#######################################
+
+APP=""
+SOURCE=""
+TARGET=""
+BIN_DIR="$HOME/.local/bin"
+NO_SYMLINK=0
+
+#######################################
+# Argument parsing (named args only)
+#######################################
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --app)
+      APP="$2"; shift 2 ;;
+    --source)
+      SOURCE="$2"; shift 2 ;;
+    --target)
+      TARGET="$2"; shift 2 ;;
+    --bin-dir)
+      BIN_DIR="$2"; shift 2 ;;
+    --no-symlink)
+      NO_SYMLINK=1; shift ;;
+    --help)
+      show_help; exit 0 ;;
+    *)
+      print_error "Unknown option: $1" && exit 1 ;;
+  esac
+done
+
+[ -n "$APP" ] || print_error "--app is required" && exit 1
+
+#######################################
+# Derived defaults
+#######################################
+
+SOURCE="${SOURCE:-https://github.com/danfortsystems/$APP/archive/refs/heads/main.tar.gz}"
+TARGET="${TARGET:-$HOME/.local/share/$APP}"
+
+#######################################
+# Prepare filesystem
+#######################################
+
+TMPDIR="$(mktemp -d)"
+trap 'rm -rf "$TMPDIR"' EXIT
+
+mkdir -p "$TARGET"
+TARGET="$(cd "$TARGET" && pwd)"
+
+#######################################
+# Fetch source
+#######################################
+
+info "Installing '$APP'"
+info "Source: $SOURCE"
+info "Target: $TARGET"
+
+case "$SOURCE" in
+  http://*|https://*|ftp://*)
+    command_exists tar || (print_error "tar is required" && exit 1)
+    if command_exists curl; then
+      curl -fsSL "$SOURCE" | tar -xz -C "$TMPDIR"
+    elif command_exists wget; then
+      wget -qO- "$SOURCE" | tar -xz -C "$TMPDIR"
+    else
+      print_error "curl or wget required" && exit 1
+    fi
+    SRC_DIR="$(find "$TMPDIR" -mindepth 1 -maxdepth 1 -type d | head -n1)"
+    ;;
+  *)
+    [ -d "$SOURCE" ] || (print_error "Source directory does not exist" && exit 1)
+    SRC_DIR="$(cd "$SOURCE" && pwd)"
+    ;;
+esac
+
+#######################################
+# Validate contents
+#######################################
+
+[ -f "$SRC_DIR/$APP" ] || (print_error "Executable '$APP' not found in source" && exit 1)
+
+#######################################
+# Install files
+#######################################
+
+info "Copying files"
+cp -R "$SRC_DIR/"* "$TARGET/"
+chmod +x "$TARGET/$APP"
+
+#######################################
+# Symlink
+#######################################
+
+SYMLINK_PATH="$BIN_DIR/$APP"
+
+if [ "$NO_SYMLINK" -eq 0 ]; then
+  mkdir -p "$BIN_DIR"
+  ln -sf "$TARGET/$APP" "$SYMLINK_PATH"
+  info "Symlinked $SYMLINK_PATH → $TARGET/$APP"
+fi
+
+#######################################
+# PATH check
+#######################################
+
+PATH_OK=0
+case ":$PATH:" in
+  *":$BIN_DIR:"*) PATH_OK=1 ;;
+esac
+
+#######################################
+# Run executable (init/migrate)
+#######################################
+
+info "Running '$APP' for initialization (errors ignored)"
+(
+  cd "$TARGET"
+  "./$APP" >/dev/null 2>&1 || true
+)
+
+#######################################
+# Validate SQL cleanup
+#######################################
+
+if [ -f "$TARGET/init.sql" ] || [ -f "$TARGET/migrate.sql" ]; then
+  error "init.sql or migrate.sql still present — initialization failed"
+fi
+
+#######################################
+# Version (best-effort)
+#######################################
+
+VERSION="unknown"
+if "$TARGET/$APP" --version >/dev/null 2>&1; then
+  VERSION="$("$TARGET/$APP" --version 2>/dev/null | head -n1)"
+fi
+
+#######################################
+# Report success
+#######################################
+
+success "Installation complete!"
+echo
+echo "Command:   $APP"
+echo "Version:   $VERSION"
+echo "Installed: $TARGET"
+echo
+
+if [ "$NO_SYMLINK" -eq 0 ]; then
+  if [ "$PATH_OK" -eq 1 ]; then
+    echo "🎉 '$APP' is available immediately."
+  else
+    echo "⚠️  '$BIN_DIR' is not in your PATH."
+    echo "    Add this to your shell config:"
+    echo "      export PATH=\"\$PATH:$BIN_DIR\""
+  fi
+else
+  echo "ℹ️  No symlink created (--no-symlink)."
+fi
+
+echo
+echo "Run '$APP --help' to get started."
