@@ -62,15 +62,15 @@ mkdir -p "$BUILD_DIR"
 
 # Build code and db directly to build directory using production database URL
 print_header "Building directly to build directory..."
-./tools/build --dest "$BUILD_DIR" --db-url "$DATABASE_URL"
+./project build --dest "$BUILD_DIR" --db-url "$DATABASE_URL"
 
 # Run tests (keeping db file for deployment)
 print_header "Running tests..."
 if [ -n "$DATABASE_URL" ]; then
-	./tools/test --keep-db-file --build-dir "$BUILD_DIR" --db-url "$DATABASE_URL"
+	./project test --keep-db-file --build-dir "$BUILD_DIR" --db-url "$DATABASE_URL"
 else
 	print_warning "DATABASE_URL not set, skipping database tests"
-	./tools/test --keep-db-file --build-dir "$BUILD_DIR"
+	./project test --keep-db-file --build-dir "$BUILD_DIR"
 fi
 
 # Bump pkg version according to update level arg (will also create a matching tag)

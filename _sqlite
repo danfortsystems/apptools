@@ -30,9 +30,6 @@ set -euo pipefail
 # Load utility functions
 source "$(dirname "$0")/../_utils.sh"
 
-# Load common database functions
-source "$(dirname "$0")/_db_common.sh"
-
 # Default values
 dest_folder_path="./dist"
 db_path="$DB_PATH"
@@ -296,7 +293,7 @@ compare_sqlite_schemas() {
 # 3. If data exists, creates temp database and compares schemas
 # 4. Handles migration based on comparison results
 main() {
-    local sorted_sql_paths=($(get_sorted_script_paths "$schema_scripts_folder_path"))
+    local sorted_sql_paths=($(get_sorted_paths "$schema_scripts_folder_path"))
 
     # Generate init script
 	print_step "Creating db init script"
