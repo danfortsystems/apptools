@@ -8,35 +8,37 @@
 # Terminate script if a command exits with a non-zero status.
 set -e
 
-source ./tools/_utils.sh
+source "$(dirname "$0")/_utils"
 
 # Default arguments
-SERVICE_NAME=$(node -p "require('./package.json').name" | sed 's/[^a-z0-9-]//g' | tr '[:upper:]' '[:lower:]')
+# Get and store project name
+PROJECT_NAME=$(node -p "require('./package.json').name" | sed 's/[^a-z0-9-]//g' | tr '[:upper:]' '[:lower:]')
 UPDATE_LEVEL="patch"
-RENDER_SERVICE_TYPE="web" # Can be "web" or "static"
-BUILD_DIR="dist"
+REPO_URL="https://github.com/danfortsystems/$PROJECT_NAME"
+INCLUDE_FILES=""
+EXCLUDE_FILES=""
 
 # Parse script arguments
 while [[ $# -gt 0 ]]; do
 	case "$1" in
-	--service-name)
-		SERVICE_NAME="$2"
-		shift 2
-		;;
-	--service-type)
-		RENDER_SERVICE_TYPE="$2"
-		shift 2
-		;;
 	--update-level)
 		UPDATE_LEVEL="$2"
 		shift 2
 		;;
-	--build-dir)
-		BUILD_DIR="$2"
+	--repo)
+		REPO_URL="$2"
+		shift 2
+		;;
+	--include)
+		INCLUDE_FILES="$2"
+		shift 2
+		;;
+	--exclude)
+		EXCLUDE_FILES="$2"
 		shift 2
 		;;
 	*)
-		echo "Usage: $0 [--service-name <render_service_name>] [--service-type <web|static>] [--update-level <patch|minor|major>] [--build-dir <build_directory>]"
+		echo "Usage: $0 [--update-level <patch|minor|major>] [--repo <git_repo_url>] [--include <files_list>] [--exclude <files_list>]"
 		exit 1
 		;;
 	esac
@@ -48,29 +50,27 @@ if [[ ! "$UPDATE_LEVEL" =~ ^(patch|minor|major)$ ]]; then
 	exit 1
 fi
 
-# Validate service type
-if [[ ! "$RENDER_SERVICE_TYPE" =~ ^(web|static)$ ]]; then
-	print_error "Invalid service type. Use 'web' or 'static'."
-	exit 1
-fi
 
-# print_header "Deploying $UPDATE_LEVEL update to Render service '$SERVICE_NAME' ($RENDER_SERVICE_TYPE)"
+# print_header "Deploying $UPDATE_LEVEL update to repo $REPO_URL"
 
-# Create build directory
-print_header "Creating build directory: $BUILD_DIR..."
-mkdir -p "$BUILD_DIR"
+# Create temporary build directory
+BUILD_DIR=$(mktemp -d)
+trap 'rm -rf "$BUILD_DIR"' EXIT
 
-# Build code and db directly to build directory using production database URL
-print_header "Building directly to build directory..."
-./project build --dest "$BUILD_DIR" --db-url "$DATABASE_URL"
+print_header "Creating temporary build directory"
+print_step "Temporary directory: $BUILD_DIR"
+
+# Build code and db to temporary directory using production database URL
+print_header "Building to temporary directory..."
+./build --dest "$BUILD_DIR" --db-url "$DATABASE_URL" --db-reset-ok
 
 # Run tests (keeping db file for deployment)
 print_header "Running tests..."
 if [ -n "$DATABASE_URL" ]; then
-	./project test --keep-db-file --build-dir "$BUILD_DIR" --db-url "$DATABASE_URL"
+	./test --keep-db-file --build-dir "$BUILD_DIR" --db-url "$DATABASE_URL"
 else
 	print_warning "DATABASE_URL not set, skipping database tests"
-	./project test --keep-db-file --build-dir "$BUILD_DIR"
+	./test --keep-db-file --build-dir "$BUILD_DIR"
 fi
 
 # Bump pkg version according to update level arg (will also create a matching tag)
@@ -83,134 +83,25 @@ print_step "New version: $PACKAGE_VERSION"
 print_header "Pushing to git repository"
 git push origin main --follow-tags
 
-# Create package.json for Render to use
-print_header "Creating Render Deployment Package"
+# Create package.json for deployment
+print_step "Creating package.json for deployment"
+# Get the current commit tag
+COMMIT_TAG=$(git describe --tags --exact-match HEAD 2>/dev/null || git rev-parse HEAD)
 cat >"$BUILD_DIR/package.json" <<EOF
 {
-	"name": "$SERVICE_NAME",
+	"name": "$PROJECT_NAME",
 	"version": "$PACKAGE_VERSION",
-	"engines": {
-		"node": "22.x"
+	"repository": {
+		"type": "git",
+		"url": "$REPO_URL"
 	},
-	"scripts": {
-		"start": "if [ \"$RENDER_SERVICE_TYPE\" = \"web\" ]; then node server.bundle.js; else echo 'Static site - no server needed'; fi",
-		"build": "./tools/build --dest dist"
-	},
-	"dependencies": {
-		"pg": "8.16.3"
-	},
-	"devDependencies": {
-		"@danfortsys/fxui": "file:../../libraries/fxui",
-		"@danfortsys/http": "file:../../libraries/http",
-		"@danfortsys/loggr": "file:../../libraries/loggr",
-		"@danfortsys/msgx": "file:../../libraries/msgx",
-		"@danfortsys/rad": "file:../../libraries/rad",
-		"@danfortsys/standard": "file:../../libraries/standard",
-		"@danfortsys/storage": "file:../../libraries/storage"
-	}
+	"commit_tag": "$COMMIT_TAG"
 }
 EOF
 
-# Create render.yaml for Render configuration
-cat >"$BUILD_DIR/render.yaml" <<EOF
-# Render Service Configuration
-services:
-  - type: $RENDER_SERVICE_TYPE
-    name: $SERVICE_NAME
-    envNodeVersion: "22"
-    env: []
-    repo: https://github.com/danfortsystems/airkeys.git
-    branch: main
-    rootDir: products/airkeys/$BUILD_DIR
-
-    # Build settings
-    buildCommand: |
-      npm ci
-      npm run build
-
-    # Start command
-    startCommand: |
-      if [ "$RENDER_SERVICE_TYPE" = "web" ]; then
-        npm start
-      fi
-
-    # Health check
-    healthCheck:
-      path: /
-      interval: 30s
-      timeout: 5s
-      retries: 3
-
-    # Environment variables (Render will add these automatically)
-    # DATABASE_URL
-    # OBJECT_STORAGE_ACCESS_KEY_ID
-    # OBJECT_STORAGE_ACCESS_KEY_SECRET
-    # OBJECT_STORAGE_ROOT_URL
-    # OBJECT_STORAGE_BUCKET
-    # OBJECT_STORAGE_REGION
-    # SMTP_USERNAME
-    # SMTP_PASSWORD
-    # SMTP_HOST
-    # SMTP_PORT
-    # TWILIO_ACCOUNT_SID
-    # TWILIO_AUTH_TOKEN
-    # STRIPE_SECRET_KEY
-    # STRIPE_PUBLISHABLE_KEY
-    # PAYSTACK_SECRET_KEY
-    # AUTH_IDS_FOR_DEVS
-    # AUTH_IDS_FOR_ADMINS
-    # AUTH_IDS_FOR_AGENTS
-    # ENCRYPTION_KEY_16_CHAR_ASCII
-
-# Render Environment Variables
-envVars:
-  - key: NODE_ENV
-    value: production
-  - key: APP_VERSION
-    value: $PACKAGE_VERSION
-
-# Automatically add all existing environment variables
-# These will be detected from your local environment
-# and added to the Render service when deployed
-EOF
-
-# Add Render-specific environment variables if they exist
-RENDER_ENV_VARS=(
-	"DATABASE_URL"
-	"OBJECT_STORAGE_ACCESS_KEY_ID"
-	"OBJECT_STORAGE_ACCESS_KEY_SECRET"
-	"OBJECT_STORAGE_ROOT_URL"
-	"OBJECT_STORAGE_BUCKET"
-	"OBJECT_STORAGE_REGION"
-	"SMTP_USERNAME"
-	"SMTP_PASSWORD"
-	"SMTP_HOST"
-	"SMTP_PORT"
-	"TWILIO_ACCOUNT_SID"
-	"TWILIO_AUTH_TOKEN"
-	"STRIPE_SECRET_KEY"
-	"STRIPE_PUBLISHABLE_KEY"
-	"PAYSTACK_SECRET_KEY"
-	"AUTH_IDS_FOR_DEVS"
-	"AUTH_IDS_FOR_ADMINS"
-	"AUTH_IDS_FOR_AGENTS"
-	"ENCRYPTION_KEY_16_CHAR_ASCII"
-)
-
-# Generate environment variables section for render.yaml
-echo "" >> "$BUILD_DIR/render.yaml"
-echo "# Environment Variables to configure in Render Dashboard" >> "$BUILD_DIR/render.yaml"
-echo "# ---------------------------------------------------" >> "$BUILD_DIR/render.yaml"
-for var in "${RENDER_ENV_VARS[@]}"; do
-	if [ -n "${!var}" ]; then
-		echo "# $var: ${!var}" >> "$BUILD_DIR/render.yaml"
-	else
-		echo "# $var: (set this value in Render dashboard)" >> "$BUILD_DIR/render.yaml"
-	fi
-done
 
 # Initialize git repo in the build directory
-print_header "Initializing Build Repository"
+print_step "Initializing git repository in build directory"
 ORIGINAL_DIR=$(pwd)
 
 # Ensure return to original dir on exit
@@ -233,22 +124,11 @@ git push -u origin main --force
 print_step "Done"
 
 # Clean up temporary build artifacts
-print_header "Cleaning Up"
+print_step "Cleaning up temporary directory"
 cd "$ORIGINAL_DIR"
 rm -rf "$BUILD_DIR"
 print_step "Done"
 
-print_header "Deployment preparation complete"
-print_step "To deploy to Render:"
-print_step "1. Push your render.yaml to your GitHub repository"
-print_step "2. Go to https://dashboard.render.com/"
-print_step "3. Connect your GitHub repository"
-print_step "4. Create a new Service from GitHub"
-print_step "5. Select the '$SERVICE_NAME' service with '$RENDER_SERVICE_TYPE' type"
-print_step "6. Set the environment variables listed in render.yaml"
-print_step "7. Deploy your service"
-
-print_header "Deployed version: $PACKAGE_VERSION"
-print_step "Render service name: $SERVICE_NAME"
-print_step "Service type: $RENDER_SERVICE_TYPE"
-print_step "Build directory: $BUILD_DIR"
+print_step "Deployment preparation complete"
+print_step "Deployed version: $PACKAGE_VERSION"
+print_step "Repository: $REPO_URL"

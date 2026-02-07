@@ -17,9 +17,9 @@ SYSTEM ARCHITECTURE
 
 		- Core Tools: Individual Bash scripts for specific actions (deps, build, test, dev, start, deploy, install).
 
-		- Environment Handler: The `_env.sh` script loads variables from a `.env` file into the environment.
+		- Environment Handler: The `_env` script loads variables from a `.env` file into the environment.
 
-		- Utility Functions: Shared functions in `_utils.sh` for consistent logging and error handling.
+		- Utility Functions: Shared functions in `_utils` for consistent logging and error handling.
 
 	Prerequisites
 		- Bash shell
@@ -35,6 +35,9 @@ SYSTEM ARCHITECTURE
 	Dynamic Recursive Loading
 		As alluded to in the description of the project command, AppTools can work without being locally installed. The dispatcher script "project" can be loaded from its url and run with sh, and it in turn loads and uses any script files it needs that do not exist locally in a similar manner, and those script files also load/use any files they depend on a similar manner, etc.
 
+	Script Invocation Principle
+		Whenever a script (that is typically called with the "project" dispatcher) needs to call another of the scripts, it should do so directly, i.e., without again calling it with the "project" dispatcher. This avoids the overhead of the dispatcher and ensures proper argument passing without potential parsing issues.
+
 	DIRECTORY STRUCTURE
 		The AppTools project files are organized in a flat structure for simplicity and ease of installation:
 
@@ -47,7 +50,6 @@ SYSTEM ARCHITECTURE
 			- start				# Production server (executable)
 			- deploy			# Deployment automation (executable)
 			- install			# CLI tool installation (executable)
-			- start				# Service management (executable)
 			- _env				# Environment variable loader (executable utility)
 			- _utils			# Shared utility functions (executable utility)
 			- _postgres			# PostgreSQL-specific database operations (executable utility)
@@ -67,7 +69,7 @@ COMMAND LINE INTERFACE
 		Behavior
 			The `project` script is a dispatcher that:
 
-			- Sets up a context for the command that is to be run. This requires sourcing the files _utils.sh (to use shared functions) and _env.sh (to load env variables from `.env` file if present). If AppTools is installed locally, then those files are in the same folder and can immediately be used. Otherwise, the project script needs to curl/wget them and source them, preferably in place without having to actually save them as files. 
+			- Sets up a context for the command that is to be run. This requires sourcing the files _utils (to use shared functions) and _env (to load env variables from `.env` file if present). If AppTools is installed locally, then those files are in the same folder and can immediately be used. Otherwise, the project script needs to curl/wget them and source them, preferably in place without having to actually save them as files. 
 
 			- Sets a log folder and file path relative to any project folder it is running it, If it does not appear to be running at a project root (no package.json, etc) then no log folder/file path should be set, and no logging should occur.
 
@@ -182,15 +184,15 @@ COMMAND LINE INTERFACE
 
 			Arguments:
 				- --update-level: A semver update level: patch, minor, or major output folder (defaults to patch).
-				- --include/--exclude: A list of files in the build output folder to include in, or exclude from, respectively, the deployment. Include is applied first, defaulting to all files, and then the exclude argument is applied, defaulting to no files.
+				- --include/--exclude: A list of files in the build output folder to include in, or exclude from, respectively, the deployment. Include is applied first, defaulting to all files, and then the exclude argument is applied, defaulting to no files. 
 				- --repo: The URL of a remote git repo to deploy the files to (defaults to https://github.com/danfortsystems/<project-name>).
 
 			Behavior:
 				The deploy command, when invoked at the root of any project, should:
 				- Ensure that the project is git-wise clean (i.e., no pending changes)
-				- Call the build script to build the project to a temporary output folder (not ./dist)
-				- Update the project version in its package.json (according to the semver update level), commit with an appropriate tag, and push
-				- Create a package.json file in the build output folder with: package name set to the project name, version set to the current project version, repository set to the main repository, and an additonal "commit_tag" or "commit_hash" property set to the relevant value. The will be no dependencies etc property on this package.json since the build will produce bundled files that do not need building again when deployed. But there could be a start script. And also maybe an engine property.
+				- Call the build script with the output folder argument set to a temporary folder (not ./dist), using the DATABASE_URL and/or DB_PATH env vars for the --db-url and/or --db-path arguments respectively, and with --db-reset-ok set
+				- Update the project version in its main package.json file (according to the semver update level), commit with an appropriate tag, and push
+				- Create a package.json file in the build output folder with: package name set to the project name, version set to the current project version, repository set to the main repository, and an additonal "commit_tag" or "commit_hash" property set to the relevant value. The will be no dependencies etc property on this package.json since the build will produce bundled files that do not need building again when deployed. But there could be an engine property.
 				- Remove files that should be excluded from the deployment (either because they are not selected by the --include argument, or they are present in the --exclude argument)
 				- Intialize a git repo in the build output folder, and set the remote to the target deployment git repo argument
 				- Commit and tag appropriately, then push to the target deployment repo
@@ -199,6 +201,9 @@ COMMAND LINE INTERFACE
 			Examples:
 				project deploy --update-level minor --repo https://github.com/user/repo.git
 				project deploy --include "*.js,*.css" --exclude "*.map" --repo https://github.com/user/repo.git
+
+			Remarks:
+				This deployment approach can also work for GitHub-based deploys to popular PaaS platforms like Render.com. The PaaS project is connected, not to the main project GitHub repo, but to a dedicated deploy-only Github repo, and this deploy repo is what is passed as the --repo argument to the deploy script. So the PaaS does not even asee the source files, only the build files that are staged on the deploy repo. Thus, we also do not need to build on the PaaS again.
 
 		Install
 			Usage: install --src <url OR folder path> --target <local-install-folder-path> --main <main-binary-file> [--version <version-number-tag>]

@@ -22,7 +22,7 @@
 set -euo pipefail
 
 # Load utility functions
-source "$(dirname "$0")/_utils.sh"
+source "$(dirname "$0")/_utils"
 
 # Default values
 dest_path="./dist"

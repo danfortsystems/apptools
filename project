@@ -7,7 +7,7 @@ set -euo pipefail
 # set -x
 
 # Load utility functions
-source "$(dirname "$0")/_utils.sh"
+source "$(dirname "$0")/_utils"
 
 # Check for help flag
 if [ $# -eq 0 ] || [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
@@ -46,7 +46,7 @@ for arg in "$@"; do
 done
 
 # Inject environment variables
-source _env.sh
+source _env
 
 # Set log directory, file path, and command, based on the action
 TIMESTAMP=$(date +"%s__%Y-%m-%d__%I-%M-%S_%p")
