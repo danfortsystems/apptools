@@ -33,12 +33,14 @@ SYSTEM ARCHITECTURE
 		The tools are designed to be executed from the root directory of a target project. They implicitly determine the current project context by reading a `.env` file (if present) and using environment variables to control their behavior. All operations are relative to the current working directory.
 
 	Dynamic Recursive Loading
-		As alluded to in the description of the project command, AppTools can work without being locally installed. The dispatcher script "project" can be loaded from its url and run with sh, and it in turn loads and uses any script files it needs that do not exist locally in a similar manner, and those script files also load/use any files they depend on a similar manner, etc.
+		As alluded to in the description of the project command, AppTools can work without being locally installed. The dispatcher script "project" can be loaded from its url and run with sh, and it in turn loads and uses any script files it needs that do not exist locally in a similar manner, and those script files also load/use any files they depend on a similar manner, etc. 
+		
+		When executed remotely, the project script creates a temporary directory (or uses an existing local installation) and downloads all required scripts from the GitHub repository. The APPTOOLS_DIR_PATH environment variable is set to point to this directory, allowing all scripts to reference each other using relative paths like "$APPTOOLS_DIR_PATH/_utils". After execution, the temporary directory is cleaned up. This centralized approach ensures all scripts are consistently available and avoids redundant downloads.
 
 	Script Invocation Principle
 		Whenever a script (that is typically called with the "project" dispatcher) needs to call another of the scripts, it should do so directly, i.e., without again calling it with the "project" dispatcher. This avoids the overhead of the dispatcher and ensures proper argument passing without potential parsing issues.
 
-	DIRECTORY STRUCTURE
+	Directory Structure
 		The AppTools project files are organized in a flat structure for simplicity and ease of installation:
 
 		Root Directory:

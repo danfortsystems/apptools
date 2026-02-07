@@ -98,12 +98,12 @@ if [[ "$only" != "app" ]]; then
     # Check if we have database configuration from command line arguments or environment variables
     if [[ -n "$db_url" ]]; then
         print_header "Building PostgreSQL DB..."
-        bash "$(dirname "$0")/db/postgres.sh" --dest "$dest_path" --db-url "$db_url" $( [[ "$db_reset_ok" == true ]] && echo "--db-reset-ok" )
+        bash "$APPTOOLS_DIR_PATH/_postgres" --dest "$dest_path" --db-url "$db_url" $( [[ "$db_reset_ok" == true ]] && echo "--db-reset-ok" )
         print_step "PostgreSQL DB build completed"
     elif [[ -n "$db_path" ]]; then
         print_header "Building SQLite DB..."
 
-        bash "$(dirname "$0")/db/sqlite.sh" --dest "$dest_path" --db-path "$db_path" $( [[ "$db_reset_ok" == true ]] && echo "--db-reset-ok" )
+        bash "$APPTOOLS_DIR_PATH/_sqlite" --dest "$dest_path" --db-path "$db_path" $( [[ "$db_reset_ok" == true ]] && echo "--db-reset-ok" )
         echo "SQLite DB build completed"
     else
         print_error "Can't build DB -- no target config specified."
