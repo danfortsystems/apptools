@@ -251,7 +251,7 @@ main() {
 			"containers")
 				# Install MinIO container
 				if [[ -z "${OBJECT_STORAGE_ROOT_URL:-}" ]] || ! is_local_url "${OBJECT_STORAGE_ROOT_URL}"; then
-					print_warning "OBJECT_STORAGE_ROOT_URL env variable not set to local url; Skipping local object storage container install"
+					print_warning "OBJECT_STORAGE_ROOT_URL env var not set to local url; Skipping local object storage container install"
 				else
 					print_header "Installing/configuring MinIO local object storage container..."
 					# Ensure Podman machine is installed and running
@@ -286,11 +286,6 @@ main() {
 					# 	exit 1
 					# }
 
-					# podman exec "$minIoContainerName" mc alias set local http://localhost:9000 "$OBJECT_STORAGE_ACCESS_KEY_ID" "$OBJECT_STORAGE_ACCESS_KEY_SECRET" >/dev/null 2>&1 || {
-					# 	print_error "Could not configure MinIO container."
-					# 	exit 1
-					# }
-
 					# Set mc alias and wait until it succeeds
 					print_step "Configuring mc alias in MinIO local object storage container..."
 					wait_for_command_in_container "$minIoContainerName" 30 \
@@ -310,7 +305,7 @@ main() {
 
 				# Install MailHog container
 				if [[ -z "${SMTP_HOST:-}" ]] || ! is_local_url "${SMTP_HOST}"; then
-					print_warning "SMTP_HOST env variable not set to local url; Skipping local SMTP container install"
+					print_warning "SMTP_HOST env var not set to local url; Skipping local SMTP container install"
 				else
 					print_header "Installing/configuring MailHog local SMTP container..."
 					if [[ "$(uname)" != "linux" ]]; then

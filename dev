@@ -6,11 +6,18 @@
 
 
 # Setup cleanup on exit
-cleanup() { kill $WATCHEXEC_PID 2>/dev/null || true; exit 0; }
+cleanup() {
+	[[ -n "${WATCHEXEC_PID:-}" ]] && kill "$WATCHEXEC_PID" 2>/dev/null
+	exit 0
+}
 trap cleanup SIGINT SIGTERM
 
 # Watch for changes using watchexec with restart and bell flags
-watchexec -r -w source/ -- "./build --dest=./dist --db-reset-ok $* && ./start $*" &
+watchexec -r -w source/ -- \
+	bash -c '
+		"$APPTOOLS_DIR_PATH/build" --dest=./dist --db-reset-ok "$@" &&
+		"$APPTOOLS_DIR_PATH/start" "$@"
+	' bash "$@" &
 WATCHEXEC_PID=$!
 
-wait $WATCHEXEC_PID
+wait "$WATCHEXEC_PID"
