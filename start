@@ -19,7 +19,7 @@
 set -euo pipefail
 
 # Load utility functions
-source "$(dirname "$0")/_utils"
+source "$APPTOOLS_DIR_PATH/_utils"
 
 # Default to environment variables
 DB_URL="${DATABASE_URL:-}"
@@ -125,28 +125,17 @@ if [[ -n "${OBJECT_STORAGE_ROOT_URL:-}" ]] && [[ "$OBJECT_STORAGE_ROOT_URL" =~ l
 		}
 	fi
 
-	# Check if minio container exists
-	CONTAINER_NAME="minio-airkeys"
-	if ! podman ps -a --format "{{.Names}}" 2>/dev/null | grep -q "^${CONTAINER_NAME}$"; then
-		print_step "Creating MinIO container..."
-		podman run -d --name "$CONTAINER_NAME" \
-			-p 9000:9000 -p 9001:9001 \
-			-e "MINIO_ROOT_USER=${OBJECT_STORAGE_ACCESS_KEY_ID:-minioadmin}" \
-			-e "MINIO_ROOT_PASSWORD=${OBJECT_STORAGE_ACCESS_KEY_SECRET:-minioadmin}" \
-			minio/minio server /data --console-address ":9001" >/dev/null 2>&1 || {
-			print_warning "Failed to create MinIO container. Continuing anyway..."
-		}
-		# Wait for MinIO to start
-		sleep 3
-	else
-		# Check if container is running
-		if ! podman ps --format "{{.Names}}" 2>/dev/null | grep -q "^${CONTAINER_NAME}$"; then
-			print_step "Starting existing MinIO container..."
-			podman start "$CONTAINER_NAME" >/dev/null 2>&1 || {
-				print_warning "Failed to start MinIO container. Continuing anyway..."
-			}
-		fi
-	fi
+	# Ensure MinIO container exists and is ready
+	ensure_container_exists "minio" \
+		"minio/minio" \
+		"-p 9000:9000 -p 9001:9001" \
+		"-e MINIO_ROOT_USER=${OBJECT_STORAGE_ACCESS_KEY_ID:-minioadmin} -e MINIO_ROOT_PASSWORD=${OBJECT_STORAGE_ACCESS_KEY_SECRET:-minioadmin}" || {
+		print_warning "Failed to ensure MinIO container exists. Continuing anyway..."
+	}
+
+	ensure_container_ready "minio" || {
+		print_warning "Failed to start MinIO container. Continuing anyway..."
+	}
 
 	# Create bucket if it doesn't exist
 	BUCKET_NAME="${OBJECT_STORAGE_BUCKET:-airkeys}"
@@ -167,26 +156,17 @@ if [[ -n "${SMTP_HOST:-}" ]] && [[ "$SMTP_HOST" =~ localhost|127\.0\.0\.1 ]]; th
 		}
 	fi
 
-	# Check if mailhog container exists
-	CONTAINER_NAME="mailhog-airkeys"
-	if ! podman ps -a --format "{{.Names}}" 2>/dev/null | grep -q "^${CONTAINER_NAME}$"; then
-		print_step "Creating MailHog container..."
-		podman run -d --name "$CONTAINER_NAME" \
-			-p 1025:1025 -p 8025:8025 \
-			mailhog/mailhog >/dev/null 2>&1 || {
-			print_warning "Failed to create MailHog container. Continuing anyway..."
-		}
-		# Wait for MailHog to start
-		sleep 3
-	else
-		# Check if container is running
-		if ! podman ps --format "{{.Names}}" 2>/dev/null | grep -q "^${CONTAINER_NAME}$"; then
-			print_step "Starting existing MailHog container..."
-			podman start "$CONTAINER_NAME" >/dev/null 2>&1 || {
-				print_warning "Failed to start MailHog container. Continuing anyway..."
-			}
-		fi
-	fi
+	# Ensure MailHog container exists and is ready
+	ensure_container_exists "mailhog" \
+		"mailhog/mailhog" \
+		"-p 1025:1025 -p 8025:8025" \
+		"" || {
+		print_warning "Failed to ensure MailHog container exists. Continuing anyway..."
+	}
+
+	ensure_container_ready "mailhog" || {
+		print_warning "Failed to start MailHog container. Continuing anyway..."
+	}
 fi
 
 # Start server with appropriate database configuration

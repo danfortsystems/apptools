@@ -23,7 +23,7 @@
 #   pnpm run test --only gui --fast	# Run GUI tests with fast Playwright config
 
 set -euo pipefail
-source "$(dirname "$0")/_utils"
+source "$APPTOOLS_DIR_PATH/_utils"
 
 # Parse & validate arguments, overriding defaults
 {

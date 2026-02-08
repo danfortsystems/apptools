@@ -28,7 +28,7 @@
 set -euo pipefail
 
 # Load utility functions
-source "$(dirname "$0")/_utils"
+source "$APPTOOLS_DIR_PATH/_utils"
 
 # Default values
 dest_folder_path="./dist"

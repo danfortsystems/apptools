@@ -63,9 +63,8 @@ setup_app_tools_dir() {
         return 1
     fi
 
-    # Find the extracted directory
-    local extracted_dir
-    extracted_dir=$(find "$temp_dir" -maxdepth 1 -type d | head -n1)
+    # The extracted directory will be apptools-main
+    local extracted_dir="$temp_dir/apptools-main"
 
     echo "$extracted_dir"
     return 0

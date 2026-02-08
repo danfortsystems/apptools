@@ -1,38 +1,11 @@
 #!/bin/sh
 set -eu
 
-# Load utility functions
-source "$(dirname "$0")/_utils"
+# Load utility functions from AppTools directory
+source "$APPTOOLS_DIR_PATH/_utils"
 
 command_exists() { command -v "$1" >/dev/null 2>&1; }
 
-#######################################
-# Help
-#######################################
-
-show_help() {
-  cat <<EOF
-Usage:
-  install.sh --app NAME [options]
-
-Required:
-  --app NAME                Application / command name
-
-Optional:
-  --source PATH|URL         Local directory or HTTP(S)/FTP tarball URL
-                            Default:
-                              https://github.com/danfortsystems/NAME/archive/refs/heads/main.tar.gz
-  --target DIR              Install directory
-                            Default: ~/.local/share/NAME
-  --bin-dir DIR             Directory for symlink
-                            Default: ~/.local/bin
-  --no-symlink              Do not create symlink
-  --help                    Show this help
-
-Designed for:
-  curl -fsSL <url> | sh -s -- --app NAME
-EOF
-}
 
 #######################################
 # Defaults
@@ -60,8 +33,6 @@ while [ $# -gt 0 ]; do
       BIN_DIR="$2"; shift 2 ;;
     --no-symlink)
       NO_SYMLINK=1; shift ;;
-    --help)
-      show_help; exit 0 ;;
     *)
       print_error "Unknown option: $1" && exit 1 ;;
   esac
