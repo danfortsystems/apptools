@@ -59,7 +59,10 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-[ -n "$MAIN" ] || print_error "--main is required" && exit 1
+if [ -z "$MAIN" ]; then
+	print_error "--main is required"
+	exit 1
+fi
 
 # Derived defaults
 if [ -z "$SOURCE" ]; then
@@ -70,10 +73,18 @@ if [ -z "$SOURCE" ]; then
   fi
 fi
 
-# Extract project name from GitHub URL
-# Format: https://github.com/user/repo/archive/refs/heads/main.tar.gz
-# Extract "repo" part
-PROJECT_NAME=$(basename "$SOURCE" | sed 's/\.tar\.gz$//' | sed 's/\.git$//')
+# Normalize GitHub repo URL to an archive URL
+if [[ "$SOURCE" =~ ^https://github.com/([^/]+)/([^/]+)(\.git)?$ ]]; then
+  OWNER="${BASH_REMATCH[1]}"
+  REPO="${BASH_REMATCH[2]}"
+  if [ -n "$VERSION" ]; then
+    SOURCE="https://github.com/$OWNER/$REPO/archive/refs/tags/$VERSION.tar.gz"
+  else
+    SOURCE="https://github.com/$OWNER/$REPO/archive/refs/heads/main.tar.gz"
+  fi
+fi
+
+PROJECT_NAME="$REPO"
 
 TARGET="${TARGET:-$HOME/.local/share/$PROJECT_NAME}"
 
@@ -91,6 +102,7 @@ print_step "Target: $TARGET"
 
 case "$SOURCE" in
   http://*|https://*|ftp://*)
+    # Download and extract archive from URL
     command_exists tar || (print_error "tar is required" && exit 1)
     if command_exists curl; then
       curl -fsSL "$SOURCE" | tar -xzf - -C "$TMPDIR"
@@ -99,9 +111,11 @@ case "$SOURCE" in
     else
       print_error "curl or wget required" && exit 1
     fi
+    # Find the extracted directory name (first directory in temp folder)
     SRC_DIR="$(find "$TMPDIR" -mindepth 1 -maxdepth 1 -type d | head -n1)"
     ;;
   *)
+    # Use local directory as source
     [ -d "$SOURCE" ] || (print_error "Source directory does not exist" && exit 1)
     SRC_DIR="$(cd "$SOURCE" && pwd)"
     ;;
