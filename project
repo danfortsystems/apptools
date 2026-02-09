@@ -112,7 +112,7 @@ fi
 # If command passed is --version, just print version info and exit
 if [ "${command}" = "--version" ]; then
 	if [ -f "$APPTOOLS_DIR_PATH/VERSION" ]; then
-		cat "$APPTOOLS_DIR_PATH/VERSION"
+		printf '%s\n' "$(cat "$APPTOOLS_DIR_PATH/VERSION")"
 	else
 		echo "unknown"
 	fi
