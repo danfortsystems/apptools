@@ -32,7 +32,7 @@
 # Set immediate exit on error (including undefined variables, pipelines)
 set -euo pipefail
 
-# Load utility functions from AppTools directory
+# Load utility functions from AppTools directory. APPTOOLS_DIR_PATH is set by the project script when calling this script
 source "$APPTOOLS_DIR_PATH/_utils"
 
 command_exists() { command -v "$1" >/dev/null 2>&1; }
@@ -69,7 +69,13 @@ if [ -z "$SOURCE" ]; then
     SOURCE="https://github.com/danfortsystems/$MAIN/archive/refs/heads/main.tar.gz"
   fi
 fi
-TARGET="${TARGET:-$HOME/.local/share/$MAIN}"
+
+# Extract project name from GitHub URL
+# Format: https://github.com/user/repo/archive/refs/heads/main.tar.gz
+# Extract "repo" part
+PROJECT_NAME=$(basename "$SOURCE" | sed 's/\.tar\.gz$//' | sed 's/\.git$//')
+
+TARGET="${TARGET:-$HOME/.local/share/$PROJECT_NAME}"
 
 # Prepare filesystem
 TMPDIR="$(mktemp -d)"
@@ -138,6 +144,7 @@ print_step "Running '$MAIN' --init for initialization (errors ignored)"
 # Validate SQL cleanup
 if [ -f "$TARGET/init.sql" ] || [ -f "$TARGET/migrate.sql" ]; then
   print_error "init.sql or migrate.sql still present — initialization failed"
+  exit 1
 fi
 
 # Report success

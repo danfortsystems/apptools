@@ -1,0 +1,17 @@
+# Logs
+logs/
+*.log
+
+# Runtime data
+*.db
+*.sqlite
+*.sqlite3
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# OS generated files
+.DS_Store

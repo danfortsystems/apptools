@@ -14,11 +14,8 @@ ARCHIVE_URL="https://github.com/danfortsystems/apptools/archive/refs/heads/main.
 # Check if AppTools is installed locally
 find_local_installation() {
     local local_paths=(
-        "$SCRIPT_DIR"
-        "$HOME/.local/bin/apptools"
+        "$(pwd)"
         "$HOME/.local/share/apptools"
-        "/usr/local/bin/apptools"
-        "/opt/apptools"
     )
 
     for path in "${local_paths[@]}"; do
@@ -158,6 +155,6 @@ else
 fi
 
 # Clean up temporary directory if it was created
-if [[ "$APPTOOLS_DIR_PATH" == *"tmp"* ]]; then
+if [[ "$APPTOOLS_DIR_PATH" == *"tmp."* ]] || [[ "$APPTOOLS_DIR_PATH" == *"tmp/"* ]]; then
     rm -rf "$APPTOOLS_DIR_PATH"
 fi
