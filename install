@@ -167,8 +167,8 @@ fi
 
 # Report success
 print_header "Installation complete!"
-print_step "Command:   $MAIN"
-print_step "Version:   $("$TARGET/$MAIN" --version 2>/dev/null | head -n1 || echo unknown)"
+print_step "Command: $MAIN"
+print_step "Version: $("$TARGET/$MAIN" --version 2>/dev/null | head -n1 || echo unknown)"
 print_step "Installed: $TARGET"
 
 if [ "$PATH_OK" -eq 1 ]; then

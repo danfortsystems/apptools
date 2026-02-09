@@ -28,7 +28,6 @@ find_local_installation() {
     echo ""
     return 1
 }
-
 # Create or get AppTools directory
 setup_app_tools_dir() {
     # Check for local installation first
@@ -103,12 +102,21 @@ for arg in "$@"; do
 	command="${command} $arg"
 done
 
-
 # Setup AppTools directory (local installation or temp directory)
 APPTOOLS_DIR_PATH=$(setup_app_tools_dir)
 if [ $? -ne 0 ] || [ -z "$APPTOOLS_DIR_PATH" ]; then
     echo "ERROR: Failed to setup AppTools directory" >&2
     exit 1
+fi
+
+# If command passed is --version, just print version info and exit
+if [ "${command}" = "--version" ]; then
+	if [ -f "$APPTOOLS_DIR_PATH/VERSION" ]; then
+		cat "$APPTOOLS_DIR_PATH/VERSION"
+	else
+		echo "unknown"
+	fi
+	exit 0
 fi
 
 # Load utility and environment functions
