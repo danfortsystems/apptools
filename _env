@@ -4,7 +4,7 @@
 ENV_FILE="./.env"
 
 if [ ! -f "$ENV_FILE" ]; then # The .env file does not exist
-  echo "Warning: Env file $ENV_FILE not found, skipping env augmentation"
+	echo "Warning: Env file $ENV_FILE not found, skipping env augmentation" >&2
 else
 	# Load each variable in the .env file
 	while IFS= read -r line; do

@@ -134,6 +134,10 @@ chmod +x "$TARGET/$MAIN"
 # Find and set execute permissions on files with shebangs
 find "$TARGET" -type f -exec grep -l '^#!' {} \; | xargs chmod +x 2>/dev/null || true
 
+if [ -n "$VERSION" ]; then
+	echo "$VERSION" > "$TARGET/VERSION"
+fi
+
 # Symlink
 BIN_DIR="$HOME/.local/bin"
 SYMLINK_PATH="$BIN_DIR/$MAIN"
