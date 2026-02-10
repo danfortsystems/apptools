@@ -126,7 +126,7 @@ esac
 
 # Install files - copy all source files to target directory
 print_step "Copying files"
-cp -R "$SRC_DIR/"* "$TARGET/"
+rsync -a "$SRC_DIR/" "$TARGET/"
 
 # Set execute permissions on the main file and any files with shebangs
 chmod +x "$TARGET/$MAIN"

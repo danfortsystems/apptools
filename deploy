@@ -55,7 +55,10 @@ fi
 
 # Create temporary build directory
 BUILD_DIR=$(mktemp -d)
-trap 'rm -rf "$BUILD_DIR"' EXIT
+cleanup_build_dir() {
+	rm -rf "$BUILD_DIR"
+}
+trap cleanup_build_dir EXIT
 
 print_header "Creating temporary build directory"
 print_step "Temporary directory: $BUILD_DIR"
@@ -107,8 +110,8 @@ ORIGINAL_DIR=$(pwd)
 # Ensure return to original dir on exit
 cleanup_deploy() {
 	cd "$ORIGINAL_DIR" 2>/dev/null || true
+	# Don't add another trap here - the existing one will handle cleanup
 }
-trap cleanup_deploy EXIT
 
 cd "$BUILD_DIR"
 git init
@@ -119,15 +122,13 @@ print_step "Done"
 
 # Set git remote for GitHub and push
 print_header "Pushing to GitHub"
-git remote add origin "https://github.com/danfortsystems/airkeys.git"
+# Extract repo name from REPO_URL for remote
+REPO_NAME=$(basename "$REPO_URL" .git)
+git remote add origin "$REPO_URL"
 git push -u origin main --force
 print_step "Done"
 
-# Clean up temporary build artifacts
-print_step "Cleaning up temporary directory"
-cd "$ORIGINAL_DIR"
-rm -rf "$BUILD_DIR"
-print_step "Done"
+# Clean up will be handled by the EXIT trap
 
 print_step "Deployment preparation complete"
 print_step "Deployed version: $PACKAGE_VERSION"

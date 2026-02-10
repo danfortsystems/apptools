@@ -32,7 +32,7 @@ source "$APPTOOLS_DIR_PATH/_utils"
 
 # Default values
 dest_folder_path="./dist"
-db_path="$DB_PATH"
+db_path="${DB_PATH:-}"
 db_reset_ok=false
 
 # Parse command line arguments

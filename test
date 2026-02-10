@@ -28,7 +28,7 @@ source "$APPTOOLS_DIR_PATH/_utils"
 # Parse & validate arguments, overriding defaults
 {
 	# Default args
-	DB_URL="$DATABASE_URL" # env variable
+	DB_URL="${DATABASE_URL:-}" # env variable, default empty to allow --db-url
 	CREATE_RANDOM_DB=true  # By default
 	BUILD_DIR="./dist"
 	KEEP_DB_FILE=false
@@ -213,7 +213,7 @@ source "$APPTOOLS_DIR_PATH/_utils"
 		if [[ -n "$OBJECT_STORAGE_ROOT_URL" ]] && [[ "$OBJECT_STORAGE_ROOT_URL" =~ localhost|127\.0\.0\.1 ]]; then
 			print_step "Verifying MinIO (local object storage) is ready..."
 
-			if ! ensure_container_ready "minio-airkeys"; then
+			if ! ensure_container_ready "minio"; then
 				print_error "MinIO container is not ready. Please run the install script first."
 				exit 1
 			fi
@@ -225,7 +225,7 @@ source "$APPTOOLS_DIR_PATH/_utils"
 		if [[ -n "${SMTP_HOST:-}" ]] && [[ "$SMTP_HOST" =~ localhost|127\.0\.0\.1 ]]; then
 			print_step "Verifying MailHog (local email testing) is ready..."
 
-			if ! ensure_container_ready "mailhog-airkeys"; then
+			if ! ensure_container_ready "mailhog"; then
 				print_error "MailHog container is not ready. Please run the install script first."
 				exit 1
 			fi
