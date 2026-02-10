@@ -7,7 +7,7 @@
 
 # Where:
 	#	<runner> is one of:
-	#	  - project (from AppTools)
+	#		- project (from AppTools)
 	#
 	#	--src <url OR folder path>			- Source: GitHub repo URL or local folder path
 	#	--target <local-install-folder-path>	- Target local folder path to install files
@@ -45,18 +45,18 @@ VERSION=""
 
 # Argument parsing (named args only)
 while [ $# -gt 0 ]; do
-  case "$1" in
-    --src)
-      SOURCE="$2"; shift 2 ;;
-    --target)
-      TARGET="$2"; shift 2 ;;
-    --main)
-      MAIN="$2"; shift 2 ;;
-    --version)
-      VERSION="$2"; shift 2 ;;
-    *)
-      print_error "Unknown option: $1" && exit 1 ;;
-  esac
+	case "$1" in
+	--src)
+	  SOURCE="$2"; shift 2 ;;
+	--target)
+	  TARGET="$2"; shift 2 ;;
+	--main)
+	  MAIN="$2"; shift 2 ;;
+	--version)
+	  VERSION="$2"; shift 2 ;;
+	*)
+	  print_error "Unknown option: $1" && exit 1 ;;
+	esac
 done
 
 if [ -z "$MAIN" ]; then
@@ -121,10 +121,10 @@ case "$SOURCE" in
     ;;
 esac
 
-# Validate contents
+# Validate contents - check if main executable exists in source
 [ -f "$SRC_DIR/$MAIN" ] || (print_error "Executable '$MAIN' not found in source" && exit 1)
 
-# Install files
+# Install files - copy all source files to target directory
 print_step "Copying files"
 cp -R "$SRC_DIR/"* "$TARGET/"
 
@@ -134,11 +134,12 @@ chmod +x "$TARGET/$MAIN"
 # Find and set execute permissions on files with shebangs
 find "$TARGET" -type f -exec grep -l '^#!' {} \; | xargs chmod +x 2>/dev/null || true
 
+# Save version info if specified
 if [ -n "$VERSION" ]; then
 	echo "$VERSION" > "$TARGET/VERSION"
 fi
 
-# Symlink
+# Create symlink in user's local bin directory
 BIN_DIR="$HOME/.local/bin"
 SYMLINK_PATH="$BIN_DIR/$MAIN"
 
@@ -146,7 +147,7 @@ mkdir -p "$BIN_DIR"
 ln -sf "$TARGET/$MAIN" "$SYMLINK_PATH"
 print_step "Symlinked $SYMLINK_PATH → $TARGET/$MAIN"
 
-# PATH check
+# Check if symlink directory is in PATH
 PATH_OK=0
 case ":$PATH:" in
   *":$BIN_DIR:"*) PATH_OK=1 ;;

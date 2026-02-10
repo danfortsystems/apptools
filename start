@@ -113,60 +113,28 @@ if [[ -n "$EXISTING_PID" ]]; then
 	sleep 1
 fi
 
-# Start MinIO if using local object storage
+# Check if MinIO container is ready when using local object storage
 if [[ -n "${OBJECT_STORAGE_ROOT_URL:-}" ]] && [[ "$OBJECT_STORAGE_ROOT_URL" =~ localhost|127\.0\.0\.1 ]]; then
-	print_step "Ensuring MinIO (local object storage) is running..."
+	print_step "Verifying MinIO (local object storage) is ready..."
 
-	# Start podman machine if not running
-	if ! podman machine list 2>/dev/null | grep -qE "Running|Currently running"; then
-		print_step "Starting Podman machine..."
-		podman machine start >/dev/null 2>&1 || {
-			print_warning "Failed to start Podman machine. Continuing anyway..."
-		}
+	if ! ensure_container_ready "minio"; then
+		print_error "MinIO container is not ready. Please run the install script first."
+		exit 1
 	fi
 
-	# Ensure MinIO container exists and is ready
-	ensure_container_exists "minio" \
-		"minio/minio" \
-		"-p 9000:9000 -p 9001:9001" \
-		"-e MINIO_ROOT_USER=${OBJECT_STORAGE_ACCESS_KEY_ID:-minioadmin} -e MINIO_ROOT_PASSWORD=${OBJECT_STORAGE_ACCESS_KEY_SECRET:-minioadmin}" || {
-		print_warning "Failed to ensure MinIO container exists. Continuing anyway..."
-	}
-
-	ensure_container_ready "minio" || {
-		print_warning "Failed to start MinIO container. Continuing anyway..."
-	}
-
-	# Create bucket if it doesn't exist
-	BUCKET_NAME="${OBJECT_STORAGE_BUCKET:-airkeys}"
-	if podman exec "$CONTAINER_NAME" mc alias set local http://localhost:9000 "${OBJECT_STORAGE_ACCESS_KEY_ID:-minioadmin}" "${OBJECT_STORAGE_ACCESS_KEY_SECRET:-minioadmin}" >/dev/null 2>&1; then
-		podman exec "$CONTAINER_NAME" mc mb "local/${BUCKET_NAME}" --ignore-existing >/dev/null 2>&1 || true
-	fi
+	print_success "MinIO container is ready"
 fi
 
-# Start MailHog if using local SMTP server
+# Check if MailHog container is ready when using local SMTP server
 if [[ -n "${SMTP_HOST:-}" ]] && [[ "$SMTP_HOST" =~ localhost|127\.0\.0\.1 ]]; then
-	print_step "Ensuring MailHog (local email testing) is running..."
+	print_step "Verifying MailHog (local email testing) is ready..."
 
-	# Start podman machine if not running
-	if ! podman machine list 2>/dev/null | grep -qE "Running|Currently running"; then
-		print_step "Starting Podman machine..."
-		podman machine start >/dev/null 2>&1 || {
-			print_warning "Failed to start Podman machine. Continuing anyway..."
-		}
+	if ! ensure_container_ready "mailhog"; then
+		print_error "MailHog container is not ready. Please run the install script first."
+		exit 1
 	fi
 
-	# Ensure MailHog container exists and is ready
-	ensure_container_exists "mailhog" \
-		"mailhog/mailhog" \
-		"-p 1025:1025 -p 8025:8025" \
-		"" || {
-		print_warning "Failed to ensure MailHog container exists. Continuing anyway..."
-	}
-
-	ensure_container_ready "mailhog" || {
-		print_warning "Failed to start MailHog container. Continuing anyway..."
-	}
+	print_success "MailHog container is ready"
 fi
 
 # Start server with appropriate database configuration

@@ -219,7 +219,7 @@ main() {
 				fi
 
 				print_step "Installing project dependencies..."
-				pnpm install
+				pnpm install --ignore-scripts
 
 				print_step "Done installing node JS packages"
 				;;
