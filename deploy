@@ -55,10 +55,16 @@ fi
 
 # Create temporary build directory
 BUILD_DIR=$(mktemp -d)
-cleanup_build_dir() {
+ORIGINAL_DIR=$(pwd)
+
+# Single cleanup function that handles both directory cleanup and cd back
+cleanup() {
+	# Clean up temporary build directory
 	rm -rf "$BUILD_DIR"
+	# Return to original directory
+	cd "$ORIGINAL_DIR" 2>/dev/null || true
 }
-trap cleanup_build_dir EXIT
+trap cleanup EXIT
 
 print_header "Creating temporary build directory"
 print_step "Temporary directory: $BUILD_DIR"
@@ -105,13 +111,7 @@ EOF
 
 # Initialize git repo in the build directory
 print_step "Initializing git repository in build directory"
-ORIGINAL_DIR=$(pwd)
-
-# Ensure return to original dir on exit
-cleanup_deploy() {
-	cd "$ORIGINAL_DIR" 2>/dev/null || true
-	# Don't add another trap here - the existing one will handle cleanup
-}
+# ORIGINAL_DIR is already set
 
 cd "$BUILD_DIR"
 git init
