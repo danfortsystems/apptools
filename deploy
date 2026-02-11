@@ -51,7 +51,15 @@ if [[ ! "$UPDATE_LEVEL" =~ ^(patch|minor|major)$ ]]; then
 fi
 
 
-# print_header "Deploying $UPDATE_LEVEL update to repo $REPO_URL"
+# Ensure project is git-wise clean (no pending changes)
+print_header "Checking git status"
+if [[ -n "$(git status --porcelain)" ]]; then
+	print_error "Repository is not clean. Please commit or stash all changes before deploying."
+	print_error "Uncommitted changes:"
+	git status --porcelain
+	exit 1
+fi
+print_step "Repository is clean"
 
 # Create temporary build directory
 BUILD_DIR=$(mktemp -d)
@@ -84,7 +92,16 @@ fi
 
 # Bump pkg version according to update level arg (will also create a matching tag)
 print_header "Updating package version"
-npm version "$UPDATE_LEVEL"
+
+if ! npm version "$UPDATE_LEVEL"; then
+	print_error "Failed to bump version with npm. This might be due to:"
+	print_error "  - Uncommitted changes (already checked above)"
+	print_error "  - Invalid version level"
+	print_error "  - Network issues"
+	print_error "Please check the error above and try again."
+	exit 1
+fi
+
 PACKAGE_VERSION=$(node -p "require('./package.json').version")
 print_step "New version: $PACKAGE_VERSION"
 
@@ -114,6 +131,50 @@ print_step "Initializing git repository in build directory"
 # ORIGINAL_DIR is already set
 
 cd "$BUILD_DIR"
+
+# Apply include/exclude filtering
+print_step "Applying file filtering..."
+
+IFS=',' read -ra INCLUDE_ARRAY <<< "${INCLUDE_FILES:-}"
+IFS=',' read -ra EXCLUDE_ARRAY <<< "${EXCLUDE_FILES:-}"
+
+RSYNC_ARGS=(-a)
+
+# Includes
+if [[ -n "${INCLUDE_FILES:-}" ]]; then
+	# First, include all directories to enable traversal
+	RSYNC_ARGS+=(--include="*/")
+	for pattern in "${INCLUDE_ARRAY[@]}"; do
+		pattern="$(echo "$pattern" | xargs)"
+		[[ -n "$pattern" ]] && RSYNC_ARGS+=(--include="$pattern")
+	done
+fi
+
+# Excludes (user)
+for pattern in "${EXCLUDE_ARRAY[@]}"; do
+	pattern="$(echo "$pattern" | xargs)"
+	[[ -n "$pattern" ]] && RSYNC_ARGS+=(--exclude="$pattern")
+done
+
+# Always exclude git
+RSYNC_ARGS+=(--exclude=".git")
+
+# If includes were specified, exclude everything else LAST
+if [[ -n "${INCLUDE_FILES:-}" ]]; then
+	RSYNC_ARGS+=(--exclude="*")
+fi
+
+rm -rf filtered
+mkdir filtered
+rsync "${RSYNC_ARGS[@]}" ./ filtered/
+
+# Clean directory safely
+find . -mindepth 1 -maxdepth 1 ! -name filtered -exec rm -rf {} +
+
+# Move filtered contents back
+rsync -a filtered/ ./
+rm -rf filtered
+
 git init
 git add .
 git commit -m "Deployed version $PACKAGE_VERSION"
