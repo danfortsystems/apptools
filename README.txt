@@ -225,10 +225,13 @@ Configuration
 Requirements
 
 	- Bash shell
-	- Standard Unix/Linux tools
-	- Podman (Container Engine) - for managing local development services
+	- Standard Unix/Linux tools (curl, wget, tar, rsync, sed, openssl)
+	- Git version control (for deployment and version operations)
+	- PostgreSQL and SQLite database engines (if using database features)
+	- Node.js runtime and package manager (pnpm/bun/npm - only for projects using Node.js)
+	- Podman Container Engine (for managing local development services)
 		- macOS: brew install podman && podman machine init && podman machine start
-		- Linux: Refer to your distribution's documentation (e.g., sudo apt install podman)
+		- Linux: Refer to your distribution's documentation (e.g., sudo apt install podman for Debian/Ubuntu, sudo dnf install podman for Fedora)
 
 See Also
 

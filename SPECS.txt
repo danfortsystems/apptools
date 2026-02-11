@@ -23,8 +23,11 @@ SYSTEM ARCHITECTURE
 
 	Prerequisites
 		- Bash shell
-		- Standard Unix/Linux tools
-		- Podman (Container Engine): For managing local development services that run in containers, such as MinIO (S3-compatible object storage) and MailHog (SMTP server). AppTools commands like `deps`, `start`, and `test` interact with Podman to ensure these services are available. 
+		- Standard Unix/Linux tools (curl, wget, tar, rsync, sed, openssl)
+		- Git version control (for deployment and version operations)
+		- PostgreSQL and SQLite database engines (if using database features)
+		- Node.js runtime and package manager (pnpm/bun/npm - only for projects using Node.js)
+		- Podman (Container Engine): For managing local development services that run in containers, such as MinIO (S3-compatible object storage) and MailHog (SMTP server). AppTools commands like `deps`, `start`, and `test` interact with Podman to ensure these services are available.
 			Installation
 			- macOS (via Homebrew): brew install podman && podman machine init && podman machine start
 			- Linux: Refer to your distribution's documentation (e.g., `sudo apt install podman` for Debian/Ubuntu, `sudo dnf install podman` for Fedora).
