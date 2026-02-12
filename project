@@ -70,27 +70,59 @@ setup_app_tools_dir() {
 if [ $# -eq 0 ] || [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
 	echo "Usage: project <action> [arguments]" >&2
 	echo "" >&2
-	echo "Available actions:" >&2
-	echo "build [--dest <path>] [--only app|db] [--db-url <url>] [--db-path <path>] [--db-reset-ok]" >&2
-	echo "Build the project" >&2
-	echo "" >&2
-	echo "deploy [--update-level <path|minor|major>] [--include <files>] [--exclude <files>] --repo <url>" >&2
-	echo "Deploy the project to a git repository" >&2
-	echo "" >&2
-	echo "start [--db-url <url>] [--db-path <path>] [--port <port>]" >&2
-	echo "Start the server" >&2
-	echo "" >&2
-	echo "test [--build-dir <dir>] [--no-db-create] [--db-url <url>] [--keep-db-file] [--log-dir <dir>] [--only <types>] [--fast]" >&2
-	echo "Run tests" >&2
-	echo "" >&2
-	echo "dev [--db-url <url>] [--port <port>]" >&2
-	echo "Start development mode with file watching" >&2
+	echo "Actions:" >&2
 	echo "" >&2
 	echo "deps [--reset <targets>]" >&2
-	echo "Manage dependencies (js, db, containers, browsers)" >&2
+	echo "  Manage dependencies (js, db, containers, browsers)" >&2
+	echo "  --reset <targets>  Reset targets before install (js, db, containers, browsers)" >&2
+	echo "  Uses: DATABASE_URL, DB_PATH, OBJECT_STORAGE_BUCKET, MSG_FROM_EMAIL_ADDRESS, PLAYWRIGHT_BROWSERS_PATH" >&2
 	echo "" >&2
-	echo "install --src <url OR folder path> --target <local-install-folder-path> --main <main-binary-file> [--version <version-number-tag>]" >&2
-	echo "Install a project from source" >&2
+	echo "build [--dest <path>] [--only app|db] [--db-url <url>] [--db-path <path>] [--db-reset-ok]" >&2
+	echo "  Build application and database" >&2
+	echo "  --dest <path>      Output directory (default: ./dist)" >&2
+	echo "  --only <app|db>    Build only app or only database" >&2
+	echo "  --db-url <url>     PostgreSQL URL (overrides DATABASE_URL)" >&2
+	echo "  --db-path <path>   SQLite path (overrides DB_PATH)" >&2
+	echo "  --db-reset-ok      Allow database reset without migration script" >&2
+	echo "" >&2
+	echo "test [--build-dir <dir>] [--no-db-create] [--db-url <url>] [--keep-db-file] [--log-dir <dir>] [--only <types>] [--fast]" >&2
+	echo "  Run tests (units, api, gui, e2e)" >&2
+	echo "  --build-dir <dir>  Build artifacts directory (default: ./dist)" >&2
+	echo "  --no-db-create     Use DATABASE_URL as-is (skip test database creation)" >&2
+	echo "  --db-url <url>     PostgreSQL URL (overrides DATABASE_URL)" >&2
+	echo "  --keep-db-file     Keep db.migrate.sql after successful migration" >&2
+	echo "  --log-dir <dir>    Log directory (default: ./logs/test/<timestamp>)" >&2
+	echo "  --only <types>     Test types: units, api, gui, e2e (comma-separated)" >&2
+	echo "  --fast             Fast mode: Chrome only, no other browsers" >&2
+	echo "" >&2
+	echo "dev [--db-url <url>] [--port <port>]" >&2
+	echo "  Start development server with file watching" >&2
+	echo "  --db-url <url>     PostgreSQL URL (overrides DATABASE_URL)" >&2
+	echo "  --port <port>      Server port (overrides PORT)" >&2
+	echo "" >&2
+	echo "start [--db-url <url>] [--db-path <path>] [--port <port>]" >&2
+	echo "  Start production server" >&2
+	echo "  --db-url <url>     PostgreSQL URL (overrides DATABASE_URL)" >&2
+	echo "  --db-path <path>   SQLite path (overrides DB_PATH)" >&2
+	echo "  --port <port>      Server port (overrides PORT)" >&2
+	echo "" >&2
+	echo "deploy [--update-level <patch|minor|major>] [--include <files>] [--exclude <files>] --repo <url>" >&2
+	echo "  Deploy to git repository with version bump" >&2
+	echo "  --update-level     Semver bump: patch, minor, or major (default: patch)" >&2
+	echo "  --include <files>  Files to include, comma-separated (default: all)" >&2
+	echo "  --exclude <files>  Files to exclude, comma-separated (default: none)" >&2
+	echo "  --repo <url>       Target repository URL (required)" >&2
+	echo "" >&2
+	echo "install --src <url|path> --target <path> --main <file> [--version <tag>]" >&2
+	echo "  Install a project locally" >&2
+	echo "  --src <url|path>   GitHub URL or local folder path" >&2
+	echo "  --target <path>    Installation directory (required)" >&2
+	echo "  --main <file>      Primary executable name (required)" >&2
+	echo "  --version <tag>    Version tag to install (GitHub only; default: latest)" >&2
+	echo "" >&2
+	echo "Global:" >&2
+	echo "  --version          Show AppTools version" >&2
+	echo "  --help, -h         Show this help" >&2
 	exit 1
 fi
 
