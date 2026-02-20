@@ -352,3 +352,40 @@ create_db_init_script() {
     echo -e "\n" >> "$output_script_path"
     # print_step "Done generating db init script"
 }
+
+# Detect and normalize operating system
+	# Outputs: macos, linux, bsd, windows, or exits with error for unsupported OS
+detect_os() {
+	local os_raw
+	os_raw="$(uname -s)"
+
+	case "$os_raw" in
+		Darwin) echo "macos" ;;
+		Linux) echo "linux" ;;
+		FreeBSD|OpenBSD|NetBSD) echo "bsd" ;;
+		MINGW*|MSYS*|CYGWIN*) echo "windows" ;;
+		*)
+			print_error "Unsupported operating system: $os_raw"
+			exit 1
+			;;
+	esac
+}
+
+# Detect and normalize architecture
+	# Outputs: x64, x86, arm64, armv7, armv6, or exits with error for unsupported architecture
+detect_arch() {
+	local arch_raw
+	arch_raw="$(uname -m)"
+
+	case "$arch_raw" in
+		x86_64|amd64) echo "x64" ;;
+		i386|i686) echo "x86" ;;
+		aarch64|arm64) echo "arm64" ;;
+		armv7l) echo "armv7" ;;
+		armv6l) echo "armv6" ;;
+		*)
+			print_error "Unsupported architecture: $arch_raw"
+			exit 1
+			;;
+	esac
+}

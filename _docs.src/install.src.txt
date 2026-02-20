@@ -1,0 +1,11 @@
+Quick Install:
+	curl -fsSL https://raw.githubusercontent.com/danfortsystems/apptools/main/project | bash -s -- install --src https://github.com/danfortsystems/apptools --name project --target "$HOME/.local/share/apptools"
+
+	This command will:
+		- Install AppTools to ~/.local/share/apptools on your machine
+		- Create a symlink at ~/.local/bin/project pointing to ~/.local/share/apptools/project, making 'project' available in your PATH
+
+Uninstall:
+	To remove AppTools from your machine:
+		rm -rf "$HOME/.local/share/apptools"
+		rm -f "$HOME/.local/bin/project"

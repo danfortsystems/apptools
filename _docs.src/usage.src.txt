@@ -1,0 +1,21 @@
+Usage Reference
+
+	Without Installation (Remote Execution):
+		You can run AppTools commands directly from GitHub without installing:
+
+		curl -fsSL https://raw.githubusercontent.com/danfortsystems/apptools/main/project | bash -s -- <command>
+
+		Examples:
+		  curl -fsSL https://raw.githubusercontent.com/danfortsystems/apptools/main/project | bash -s -- deps
+		  curl -fsSL https://raw.githubusercontent.com/danfortsystems/apptools/main/project | bash -s -- build
+		  curl -fsSL https://raw.githubusercontent.com/danfortsystems/apptools/main/project | bash -s -- test
+
+	With Local Installation:
+		After installing locally, you can run commands directly:
+
+		project <command>
+
+		Examples:
+		  project deps
+		  project build
+		  project test

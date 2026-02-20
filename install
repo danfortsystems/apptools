@@ -1,32 +1,37 @@
 #!/usr/bin/env bash
 
 # Install script for AppTools
-
+#
 # Usage:
-	#	<runner> `install --src <url OR folder path> --target <local-install-folder-path> --main <main-binary-file> [--version <version-number-tag>]`
-
-# Where:
-	#	<runner> is one of:
-	#		- project (from AppTools)
-	#
-	#	--src <url OR folder path>			- Source: GitHub repo URL or local folder path
-	#	--target <local-install-folder-path>	- Target local folder path to install files
-	#	--main <main-binary-file>			- Name of primary executable file
-	#	--version <version-number-tag>		- Version tag to install (GitHub only)
-
-# Remarks:
+	#	install --src <url OR folder path> --name <command-name> [--target <local-install-folder-path>] [--version <version-number-tag>]
+#
+# Arguments:
+	#	--src <url OR folder path>				- Source of installation files (GitHub repo archive URL or local folder path) [required]
+	#	--name <package/command-name>			- Package name used as the main command installed [required]
+	#	--target <local-install-folder-path>	- Target local folder path (default: $HOME/.local/share/$NAME)
+	#	--version <version-number-tag>			- Version tag to install (GitHub only)
+#
+# Behavior:
 	#	- Creates the target installation directory if it doesn't exist
-	#	- For GitHub URLs: downloads archive, extracts, and moves contents to target
-	#	- For local paths: copies files from source to target
-	#	- Sets proper permissions on the main executable
-	#	- Creates symlink in ~/.local/bin
-	#	- Runs initialization tasks with --init flag
-	#	- Verifies installation by checking --version flag
-	#	- Validates that no init.sql or migrate.sql files remain after initialization
-
+	#	- For a local source folder: stages the source files to the target directory
+	#	- For a GitHub source: downloads, extracts, & stages archive contents to the target directory
+	#	- Detects operating system and architecture (Darwin→macos, Linux→linux; x86_64→x64, aarch64→arm64, etc.)
+	#	- Selects the specific executable file to install with platform-specific fallback:
+	#		1. First tries: {name}-{os}-{architecture} (e.g., myapp-macos-arm64)
+	#		2. Falls back to: {name} (generic, non-platform-specific)
+	#		3. Errors with available file listing if neither found
+	#	- Sets permissions on the executable and creates a symlink in a standard bin directory (e.g., ~/.local/bin) pointing to it
+	#	- Runs the installed executable with the --init flag to perform initialization/migration tasks and verifies its success
+	#	- Verifies installation by running the installed executable with the --version flag
+#
+# Remarks:
+	#	Source (--src) above does not usually refer to source files as typically understood in software projects. It simply means the "source" of the installation files. For a local source, it is typically the build output folder (e.g., ./dist). A remote GitHub source is typically a repo that contains only build output files that have been deployed to it.
+	#
+	#	The installer will automatically select the matching executable for the current system to install. For self-contained executables (SEAs), the expected name is: {package}-{os}-{architecture} (e.g., myapp-macos-arm64, myapp-linux-x64). If such a file does not exist, but an executable (likely non-self-contained) exists named exactly as the name argument, that is installed instead. If no suitable executable to install is found, the script stops with an error.
+#
 # Examples:
-	#	install --src https://github.com/user/repo.git --target /path/to/install --main myapp --version v1.0.0
-	#	install --src ./local/path --target ~/apps/myapp --main myapp
+	#	install --src https://github.com/user/repo.git --name myapp --version v1.0.0
+	#	install --src ./dist --name myapp --target /custom/install/path
 #
 
 # Set immediate exit on error (including undefined variables, pipelines)
@@ -38,7 +43,7 @@ source "$APPTOOLS_DIR_PATH/_utils"
 command_exists() { command -v "$1" >/dev/null 2>&1; }
 
 # Defaults
-MAIN=""
+NAME=""
 SOURCE=""
 TARGET=""
 VERSION=""
@@ -50,8 +55,8 @@ while [ $# -gt 0 ]; do
 	  SOURCE="$2"; shift 2 ;;
 	--target)
 	  TARGET="$2"; shift 2 ;;
-	--main)
-	  MAIN="$2"; shift 2 ;;
+	--name)
+	  NAME="$2"; shift 2 ;;
 	--version)
 	  VERSION="$2"; shift 2 ;;
 	*)
@@ -59,18 +64,14 @@ while [ $# -gt 0 ]; do
 	esac
 done
 
-if [ -z "$MAIN" ]; then
-	print_error "--main is required"
+if [ -z "$NAME" ]; then
+	print_error "--name is required"
 	exit 1
 fi
 
-# Derived defaults
 if [ -z "$SOURCE" ]; then
-  if [ -n "$VERSION" ]; then
-    SOURCE="https://github.com/danfortsystems/$MAIN/archive/refs/tags/$VERSION.tar.gz"
-  else
-    SOURCE="https://github.com/danfortsystems/$MAIN/archive/refs/heads/main.tar.gz"
-  fi
+	print_error "--src is required"
+	exit 1
 fi
 
 # Normalize GitHub repo URL to an archive URL
@@ -84,9 +85,7 @@ if [[ "$SOURCE" =~ ^https://github.com/([^/]+)/([^/]+)(\.git)?$ ]]; then
   fi
 fi
 
-PROJECT_NAME="$REPO"
-
-TARGET="${TARGET:-$HOME/.local/share/$PROJECT_NAME}"
+TARGET="${TARGET:-$HOME/.local/share/$NAME}"
 
 # Prepare filesystem
 TMPDIR="$(mktemp -d)"
@@ -96,7 +95,7 @@ mkdir -p "$TARGET"
 TARGET="$(cd "$TARGET" && pwd)"
 
 # Fetch source
-print_step "Installing '$MAIN'"
+print_step "Installing '$NAME'"
 print_step "Source: $SOURCE"
 print_step "Target: $TARGET"
 
@@ -121,15 +120,41 @@ case "$SOURCE" in
     ;;
 esac
 
-# Validate contents - check if main executable exists in source
-[ -f "$SRC_DIR/$MAIN" ] || (print_error "Executable '$MAIN' not found in source" && exit 1)
+# Detect platform and select executable
+OS="$(detect_os)"
+ARCH="$(detect_arch)"
+
+# Select executable with platform-specific fallback
+EXECUTABLE=""
+PLATFORM_SPECIFIC="${NAME}-${OS}-${ARCH}"
+
+print_step "Detected platform: ${OS}-${ARCH}"
+
+# Try platform-specific executable first
+if [ -f "$SRC_DIR/$PLATFORM_SPECIFIC" ]; then
+	EXECUTABLE="$PLATFORM_SPECIFIC"
+	print_step "Selected platform-specific executable: $EXECUTABLE"
+# Fallback to non-platform-specific executable
+elif [ -f "$SRC_DIR/$NAME" ]; then
+	EXECUTABLE="$NAME"
+	print_step "Selected generic executable: $EXECUTABLE"
+	print_warning "Platform-specific executable '$PLATFORM_SPECIFIC' not found, using generic '$NAME'"
+else
+	print_error "No suitable executable found in source"
+	print_error "Looked for:"
+	print_error "  1. Platform-specific: $PLATFORM_SPECIFIC"
+	print_error "  2. Generic fallback: $NAME"
+	print_error "Available files in source:"
+	ls -la "$SRC_DIR" | grep -E "^-" | awk '{print "  " $9}' >&2
+	exit 1
+fi
 
 # Install files - copy all source files to target directory
 print_step "Copying files"
 rsync -a "$SRC_DIR/" "$TARGET/"
 
-# Set execute permissions on the main file and any files with shebangs
-chmod +x "$TARGET/$MAIN"
+# Set execute permissions on the selected executable and any files with shebangs
+chmod +x "$TARGET/$EXECUTABLE"
 
 # Find and set execute permissions on files with shebangs
 find "$TARGET" -type f -exec grep -l '^#!' {} \; | xargs chmod +x 2>/dev/null || true
@@ -141,11 +166,11 @@ fi
 
 # Create symlink in user's local bin directory
 BIN_DIR="$HOME/.local/bin"
-SYMLINK_PATH="$BIN_DIR/$MAIN"
+SYMLINK_PATH="$BIN_DIR/$NAME"
 
 mkdir -p "$BIN_DIR"
-ln -sf "$TARGET/$MAIN" "$SYMLINK_PATH"
-print_step "Symlinked $SYMLINK_PATH → $TARGET/$MAIN"
+ln -sf "$TARGET/$EXECUTABLE" "$SYMLINK_PATH"
+print_step "Symlinked $SYMLINK_PATH → $TARGET/$EXECUTABLE"
 
 # Check if symlink directory is in PATH
 PATH_OK=0
@@ -154,10 +179,10 @@ case ":$PATH:" in
 esac
 
 # Run executable (init/migrate)
-print_step "Running '$MAIN' --init for initialization (errors ignored)"
+print_step "Running '$NAME' --init for initialization (errors ignored)"
 (
   cd "$TARGET"
-  "./$MAIN" --init >/dev/null 2>&1 || true
+  "./$EXECUTABLE" --init >/dev/null 2>&1 || true
 )
 
 # Validate SQL cleanup
@@ -168,16 +193,16 @@ fi
 
 # Report success
 print_header "Installation complete!"
-print_step "Command: $MAIN"
-print_step "Version: $("$TARGET/$MAIN" --version 2>/dev/null | head -n1 || echo unknown)"
+print_step "Command: $NAME"
+print_step "Version: $("$TARGET/$EXECUTABLE" --version 2>/dev/null | head -n1 || echo unknown)"
 print_step "Installed: $TARGET"
 
 if [ "$PATH_OK" -eq 1 ]; then
-  print_step "'$MAIN' is available immediately."
+  print_step "'$NAME' is available immediately."
 else
   print_warning "'$BIN_DIR' is not in your PATH."
   print_step "Add this to your shell config:"
   print_step "export PATH=\"\$PATH:$BIN_DIR\""
 fi
 
-print_step "Run '$MAIN --help' to get started."
+print_step "Run '$NAME --help' to get started."

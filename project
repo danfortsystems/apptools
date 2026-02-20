@@ -77,13 +77,16 @@ if [ $# -eq 0 ] || [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
 	echo "  --reset <targets>  Reset targets before install (js, db, containers, browsers)" >&2
 	echo "  Uses: DATABASE_URL, DB_PATH, OBJECT_STORAGE_BUCKET, MSG_FROM_EMAIL_ADDRESS, PLAYWRIGHT_BROWSERS_PATH" >&2
 	echo "" >&2
-	echo "build [--dest <path>] [--only app|db] [--db-url <url>] [--db-path <path>] [--db-reset-ok]" >&2
-	echo "  Build application and database" >&2
-	echo "  --dest <path>      Output directory (default: ./dist)" >&2
-	echo "  --only <app|db>    Build only app or only database" >&2
-	echo "  --db-url <url>     PostgreSQL URL (overrides DATABASE_URL)" >&2
-	echo "  --db-path <path>   SQLite path (overrides DB_PATH)" >&2
-	echo "  --db-reset-ok      Allow database reset without migration script" >&2
+	echo "build [--dest <path>] [--only app|exc|db] [--db-url <url>] [--db-path <path>] [--db-reset-ok]" >&2
+	echo "  Build application, executable, and/or database" >&2
+	echo "  --dest <path>          Output directory (default: ./dist)" >&2
+	echo "  --only <targets>       Comma-separated targets: app, exc, db (default: all)" >&2
+	echo "                           app: typecheck and bundle client/server code" >&2
+	echo "                           exc: build self-contained platform executable ({name}-{os}-{arch})" >&2
+	echo "                           db:  generate db init/migration scripts" >&2
+	echo "  --db-url <url>         PostgreSQL URL (overrides DATABASE_URL)" >&2
+	echo "  --db-path <path>       SQLite path (overrides DB_PATH)" >&2
+	echo "  --db-reset-ok          Allow database reset without migration script" >&2
 	echo "" >&2
 	echo "test [--build-dir <dir>] [--no-db-create] [--db-url <url>] [--keep-db-file] [--log-dir <dir>] [--only <types>] [--fast]" >&2
 	echo "  Run tests (units, api, gui, e2e)" >&2
@@ -113,15 +116,16 @@ if [ $# -eq 0 ] || [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
 	echo "  --exclude <files>  Files to exclude, comma-separated (default: none)" >&2
 	echo "  --repo <url>       Target repository URL (required)" >&2
 	echo "" >&2
-	echo "install --src <url|path> --target <path> --main <file> [--version <tag>]" >&2
+	echo "install --src <url|path> --name <command> [--target <path>] [--version <tag>]" >&2
 	echo "  Install a project locally" >&2
-	echo "  --src <url|path>   GitHub URL or local folder path" >&2
-	echo "  --target <path>    Installation directory (required)" >&2
-	echo "  --main <file>      Primary executable name (required)" >&2
+	echo "  --src <url|path>   GitHub URL or local folder path (required)" >&2
+	echo "  --name <command>   Package/command name (required); selects {name}-{os}-{arch} executable or falls back to {name}" >&2
+	echo "  --target <path>    Installation directory (default: ~/.local/share/<name>)" >&2
 	echo "  --version <tag>    Version tag to install (GitHub only; default: latest)" >&2
 	echo "" >&2
 	echo "Global:" >&2
 	echo "  --version          Show AppTools version" >&2
+	echo "  --init             No-op (AppTools has no initialization tasks; supported for install compatibility)" >&2
 	echo "  --help, -h         Show this help" >&2
 	exit 1
 fi
@@ -148,6 +152,11 @@ if [ "${command}" = "--version" ]; then
 	else
 		echo "unknown"
 	fi
+	exit 0
+fi
+
+# If command passed is --init, no-op (AppTools has no initialization tasks)
+if [ "${command}" = "--init" ]; then
 	exit 0
 fi
 

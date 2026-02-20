@@ -149,7 +149,7 @@ source "$APPTOOLS_DIR_PATH/_utils"
 			# Generate random database name
 			TIMESTAMP=$(date +%s)
 			RANDOM_SUFFIX=$(openssl rand -hex 4 2>/dev/null || echo "${TIMESTAMP: -4}")
-			DB_NAME="test_airkeys_${TIMESTAMP}_${RANDOM_SUFFIX}"
+			DB_NAME="test_app_${TIMESTAMP}_${RANDOM_SUFFIX}"
 
 			# Extract base URL (everything before the last /)
 			BASE_URL="${DB_URL%/*}"

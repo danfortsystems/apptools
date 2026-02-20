@@ -1,0 +1,33 @@
+Configuration
+
+	Projects managed with AppTools can use environment variables to configure how AppTools operates on them:
+
+	- NODE_ENV
+		Development/production environment (dev/prod), default: dev
+
+	- DATABASE_URL
+		PostgreSQL database connection string (format: postgres://user:pass@host:port/dbname) Controls database reset/install operations. When set, enables PostgreSQL database management.
+
+	- DB_PATH
+		SQLite database file path Controls database file location for SQLite databases. When set, enables SQLite database management and creates the database file if it doesn't exist.
+
+	- OBJECT_STORAGE_ROOT_URL
+		Root url for S3-compatible object storage used by a project. When set to a local machine url (e.g., http://localhost:9000), enables the installation and configuration of the MinIO local object storage container by AppTools for testing.
+
+	- OBJECT_STORAGE_BUCKET
+		Object storage bucket name used by the project. For local object storage as defined by OBJECT_STORAGE_ROOT_URL, it is used to create project-specific storage areas within the same MinIO container.
+
+	- OBJECT_STORAGE_ACCESS_KEY_ID
+		Authentication key for object storage service. When OBJECT_STORAGE_ROOT_URL is set to a local url, defines the access key for MinIO authentication.
+
+	- OBJECT_STORAGE_ACCESS_KEY_SECRET:
+		Authentication secret for object storage service. When OBJECT_STORAGE_ROOT_URL is set to a local url, defines the access key secret for MinIO authentication.
+
+	- SMTP_HOST
+		SMTP server host used by the project. When set to a local url (e.g., http://localhost:1025), triggers MailHog container installation for email testing during development.
+
+	- MSG_FROM_EMAIL_ADDRESS
+		Email address to use for sending emails for a project by SMTP. For local testing, enables per-project email separation in MailHog.
+
+	- PLAYWRIGHT_BROWSERS_PATH
+		Path for Playwright browser installations. When set, triggers Playwright browser installation for UI testing.

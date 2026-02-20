@@ -9,14 +9,19 @@ Features
 	- Environment variable-based configuration for project behavior
 	- Comprehensive logging and error handling
 	- Container Management:
-		Container names are generic (minio, mailhog) for sharing across projects. Isolation is achieved through per-project buckets (for object storage) and per-project mail-from addresses (for SMTP), all of which as specified with env variables. Containers are installed based on presence of the env variables OBJECT_STORAGE_ROOT_URL (MinIO) and SMTP_HOST (MailHog). Se the Environment Variables section for more details.
+		Container names are generic (minio, mailhog) for sharing across projects. Isolation is achieved through per-project buckets (for object storage) and per-project mail-from addresses (for SMTP), all of which as specified with env variables. Containers are installed based on presence of the env variables OBJECT_STORAGE_ROOT_URL (MinIO) and SMTP_HOST (MailHog). See the Configuration section for more details.
 
 Quick Install:
-	curl -fsSL https://raw.githubusercontent.com/danfortsystems/apptools/main/project | bash -s -- install --src https://github.com/danfortsystems/apptools --target "$HOME/.local/bin/apptools" --main project
+	curl -fsSL https://raw.githubusercontent.com/danfortsystems/apptools/main/project | bash -s -- install --src https://github.com/danfortsystems/apptools --name project --target "$HOME/.local/share/apptools"
 
 	This command will:
-		- Install AppTools to a user folder on the machine
-		- Create a symlink so you can run 'project' directly from your PATH
+		- Install AppTools to ~/.local/share/apptools on your machine
+		- Create a symlink at ~/.local/bin/project pointing to ~/.local/share/apptools/project, making 'project' available in your PATH
+
+Uninstall:
+	To remove AppTools from your machine:
+		rm -rf "$HOME/.local/share/apptools"
+		rm -f "$HOME/.local/bin/project"
 
 Usage Reference
 
@@ -59,28 +64,21 @@ Usage Reference
 				project deps --reset						# Reset and reinstall all
 				project deps --reset db,js				# Reset db and js, install others
 
-		build [--dest <path>] [--only app|db] [--db-url <url>] [--db-path <path>] [--db-reset-ok]
-			Build application and database
+		build [--dest <path>] [--only app|exc|db] [--db-url <url>] [--db-path <path>] [--db-reset-ok]
+			Build application, executable, and/or database
 
 			Arguments:
 				--dest <path>		- Output directory for build artifacts (default: ./dist)
-				--only <app|db>		- Build only app code or only database
+				--only <targets>	- Comma-separated targets to build: app, exc, db (default: all)
 				--db-url <url>		- PostgreSQL connection URL for database build
 				--db-path <path>	- SQLite database file path for database build
 				--db-reset-ok		- Allow database reset when no migration script exists
-
-			Behavior:
-				- Processes SQL schema files to generate database initialization scripts
-				- Compares existing schema with DDL scripts to detect changes
-				- Generates db.init.sql always
-				- Generates db.migrate.sql if schema differences detected
-				- --db-reset-ok flag allows database reset when no migration script exists
 
 			Examples:
 				project build							# Full build to ./dist
 				project build --dest ./build				# Build to custom directory
 				project build --only db					# Database build only
-				project build --only app --dest ./build	# App build only to custom directory
+				project build --only app,exc --dest ./build	# App and executable build to custom directory
 
 		test [--build-dir <dir>] [--no-db-create] [--db-url <url>] [--keep-db-file] [--log-dir <dir>] [--only <types>] [--fast]
 			Run tests (units, API, GUI, E2E)
@@ -166,27 +164,33 @@ Usage Reference
 				This deployment approach works for GitHub-based deploys to PaaS platforms like Render.com.
 				The PaaS project is connected to a dedicated deploy-only GitHub repo, not the main source repo.
 
-		install --src <url OR folder path> --target <local-install-folder-path> --main <main-binary-file> [--version <version-number-tag>]
+		install --src <url OR folder path> --name <command-name> [--target <local-install-folder-path>] [--version <version-number-tag>]
 			Install a project from source
 
 			Arguments:
-				--src <url OR folder path>			- Source: GitHub repo URL or local folder path
-				--target <local-install-folder-path>	- Target local folder path to install files
-				--main <main-binary-file>			- Name of primary executable file
-				--version <version-number-tag>		- Version tag to install (GitHub only)
+				--src <url OR folder path>				- Source of installation files (GitHub repo archive URL or local folder path) [required]
+				--name <package/command-name>			- Package name used as the main command installed [required]
+				--target <local-install-folder-path>	- Target local folder path (default: ~/.local/share/<name>)
+				--version <version-number-tag>			- Version tag to install (GitHub only)
 
 			Behavior:
-				- Creates target installation directory if it doesn't exist
-				- Copies or downloads installation files from source
-				- For GitHub: downloads archive, extracts, moves contents to target
-				- Sets proper permissions on main executable
-				- Creates symlink in standard user bin directory (e.g., ~/.local/bin)
-				- Runs initialization tasks with --init flag
-				- Verifies installation with --version flag
+				- Creates the target installation directory if it doesn't exist
+				- For a local source folder: stages the source files to the target directory
+				- For a GitHub source: downloads, extracts, & stages archive contents to the target directory
+				- Detects operating system and architecture, then selects the executable to install:
+					1. First tries {name}-{os}-{architecture} (e.g., myapp-macos-arm64)
+					2. Falls back to {name} (generic, non-platform-specific)
+					3. Errors with available file listing if neither is found
+				- Sets permissions on the executable and creates a symlink at ~/.local/bin/<name> pointing to it
+				- Runs the installed executable with the --init flag to perform initialization/migration tasks
+				- Verifies installation by running the installed executable with the --version flag
+
+			Remarks:
+				Source (--src) above does not usually refer to source files as typically understood in software projects. It simply means the "source" of the installation files. For a local source, it is typically the build output folder (e.g., ./dist). A remote GitHub source is typically a repo that contains only build output files that have been deployed to it.
 
 			Examples:
-				install --src https://github.com/user/repo.git --target /path/to/install --main myapp --version v1.0.0
-				install --src ./local/path --target ~/apps/myapp --main myapp
+				install --src https://github.com/user/repo.git --name myapp --version v1.0.0
+				install --src ./dist --name myapp --target /custom/install/path
 
 Configuration
 
@@ -214,7 +218,7 @@ Configuration
 		Authentication secret for object storage service. When OBJECT_STORAGE_ROOT_URL is set to a local url, defines the access key secret for MinIO authentication.
 	
 	- SMTP_HOST
-		STMP server host used by the project. When set to a local url (e.g., http://localhost:1025), triggers MailHog container installation for email testing during development.
+		SMTP server host used by the project. When set to a local url (e.g., http://localhost:1025), triggers MailHog container installation for email testing during development.
 	
 	- MSG_FROM_EMAIL_ADDRESS
 		Email address to use for sending emails for a project by SMTP. For local testing, enables per-project email separation in MailHog.

@@ -77,7 +77,7 @@ print_step "Server port: ${SERVER_PORT}\n"
 
 # Check if server bundle exists
 if [[ ! -f "$SERVER_BUNDLE" ]]; then
-	print_error "Server bundle not found at $SERVER_BUNDLE. Please run 'airkeys build' first."
+	print_error "Server bundle not found at $SERVER_BUNDLE. Please run 'project build' first."
 	exit 1
 fi
 

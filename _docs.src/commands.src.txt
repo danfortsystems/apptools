@@ -1,0 +1,164 @@
+	Available Commands
+
+		deps [--reset <targets>]
+			Install dependencies (Node.js packages, databases, containers, browsers)
+
+			Options:
+				--reset <targets>: Comma-separated list of targets to reset before install (js, db, containers, browsers) (default: none)
+
+			Behavior:
+				- Manages dependencies based on environment variables
+				- Valid targets: js (Node.js packages), db (databases), containers (Podman), browsers (Playwright)
+				- If no --reset specified, installs all available dependencies
+				- If --reset specified, resets specified targets then installs all
+
+			Examples:
+				project deps							# Install all available dependencies
+				project deps --reset						# Reset and reinstall all
+				project deps --reset db,js				# Reset db and js, install others
+
+		build [--dest <path>] [--only <targets>] [--db-url <url>] [--db-path <path>] [--db-reset-ok]
+			Build application code, executable, and/or database
+
+			Options:
+				--dest <path>: Output directory for build artifacts (default: ./dist)
+				--only <targets>: Comma-separated list of targets to build: app, exc, and/or db (default: all)
+				--db-url <url>: PostgreSQL connection URL for database build (default: DATABASE_URL env var)
+				--db-path <path>: SQLite database file path for database build (default: DB_PATH env var)
+				--db-reset-ok: Allow database reset when no migration script exists (default: disabled)
+
+			Behavior:
+				Building the various targets involve:
+					- Application code (app): Typechecking and bundling client & server app code
+					- Executable (exc): Creating self-contained platform specific executable (uses bin/main.ts entry point by convention). Output is named {package}-{os}-{architecture} (e.g., myapp-macos-arm64, myapp-linux-x64)
+					- Db (db): Generating db init/migration scripts as necessary
+
+				The db build consolidates the schema sql files into a single db.init.sql script with proper dependency ordering, in the build output folder, that acts as a reference script for (re)creating the correct schema. It then checks if the db schema files are compatible with the db referenced by the effective db url or db path argument and proceeds as follows:
+					- If the schema has not changed, it does nothing further.
+					- If the schema has data and has changed, it expects a .migrate.sql file in the schema sql script folder, containing migration logic to preserve existing data, which is copied to the build output folder.
+					- Otherwise if the schema has changed but has no data or --db-reset-ok is passed, it creates another consolidated init script (but this time named as db.migrate.sql) in the build output folder.
+
+					Whenever the app is next started or tested, any existing db.migrate.sql in the build output folder is applied to the attached db and deleted on success.
+
+			Examples:
+				project build									# Full build to ./dist
+				project build --dest ./build					# Build to custom directory
+				project build --only db	--db-path ./path/to/db	# Database build only with db path specified
+				project build --only app --dest ./build			# App build only to custom directory
+				project build --only app,exc					# Build app bundles and executables only
+
+		test [--build-dir <dir>] [--no-db-create] [--db-url <url>] [--keep-db-file] [--log-dir <dir>] [--only <types>] [--fast]
+			Run tests (units, API, GUI, E2E)
+
+			Options:
+				--build-dir <dir>: Directory containing build artifacts (default: ./dist)
+				--no-db-create: Don't create a random test database (uses DATABASE_URL as-is) (default: disabled)
+				--db-url <url>: Database connection URL (overrides DATABASE_URL env var) (default: DATABASE_URL env var)
+				--keep-db-file: Keep db.migrate.sql file after successful migration (default: disabled)
+				--log-dir <dir>: Custom directory for test logs (default: ./logs/test/<timestamp>)
+				--only <types>: Run only specified test types (comma-separated: units,api,gui,e2e) (default: all)
+				--fast: Use fast Playwright configuration (Chrome only, faster execution) (default: disabled)
+
+			Behavior:
+				- Manages test environment including database setup
+				- Runs different test types based on configuration
+				- Cleans up resources after completion
+				- Supports multiple test runners for different test categories
+
+			Examples:
+				project test							# Run all tests
+				project test --only units				# Run only unit tests
+				project test --only api,gui			# Run API and GUI tests
+				project test --fast					# Run all tests with fast config
+
+		dev [--db-url <url>] [--port <port>]
+			Start development server with file watching
+
+			Options:
+				--db-url <url>: Database connection URL (overrides DATABASE_URL env var) (default: DATABASE_URL env var)
+				--port <port>: Server port (overrides PORT env var) (default: PORT env var)
+
+			Behavior:
+				- Starts development server with file watching using watchexec
+				- Automatically rebuilds and restarts on file changes
+				- Invokes build and start commands with arguments
+				- Useful for iterative development with live reload
+
+			Examples:
+				project dev --db-url "postgres://localhost:5432/mydb" --port 3000
+				project dev --port 3000
+				project dev									# Uses DATABASE_URL and PORT env vars
+
+		start [--db-url <url>] [--db-path <path>] [--port <port>]
+			Start production server
+
+			Options:
+				--db-url <url>: Database connection URL (overrides DATABASE_URL env var) (default: DATABASE_URL env var)
+				--db-path <path>: SQLite database file path (overrides DB_PATH env var) (default: DB_PATH env var)
+				--port <port>: Server port (overrides PORT env var) (default: PORT env var)
+
+			Behavior:
+				- Starts the application server
+				- Manages required services (containers) if using local services
+				- Kills any existing process using the target port
+				- Runs database migration if db.migrate.sql exists
+				- Requires server bundle at ./dist/server.bundle.cjs
+
+			Examples:
+				project start --db-url "postgres://localhost:5432/mydb" --port 3000
+				project start --db-path "./data/myapp.db" --port 3000
+				project start									# Uses DATABASE_URL, DB_PATH, and PORT env vars
+
+		deploy [--update-level <patch|minor|major>] [--include <files>] [--exclude <files>] --repo <url>
+			Deploy to git repository
+
+			Options:
+				--update-level <level>: Semver update level for version bump (patch, minor, major) (default: patch)
+				--include <files>: Comma-separated files to include in deployment (default: all files)
+				--exclude <files>: Comma-separated files to exclude from deployment (default: no files)
+				--repo <url>: URL of remote git repo to deploy to (required)
+
+			Behavior:
+				- Ensures project is git-wise clean (no pending changes)
+				- Calls build script with output folder set to temporary folder
+				- Updates project version in package.json (according to semver level)
+				- Commits with appropriate tag and pushes
+				- Creates package.json in build output folder with project metadata
+				- Removes excluded files from deployment
+				- Initializes git repo in build output folder and pushes to target repo
+
+			Examples:
+				project deploy --update-level minor --repo https://github.com/user/repo.git
+				project deploy --include "*.js,*.css" --exclude "*.map" --repo https://github.com/user/repo.git
+
+			Remarks:
+				This deployment approach works for GitHub-based deploys to PaaS platforms like Render.com.
+				The PaaS project is connected to a dedicated deploy-only GitHub repo, not the main source repo.
+
+		install --src <url OR folder path> --name <command-name> [--target <local-install-folder-path>] [--version <version-number-tag>]
+			Install a project from source
+
+			Options:
+				--src <url OR folder path>: Source of installation files (GitHub repo archive URL or local folder path) (required)
+				--name <package/command-name>: Package name used as the main command installed (required)
+				--target <local-install-folder-path>: Target local folder path in which to install files (default: ~/.local/share/<name>)
+				--version <version-number-tag>: Version tag to install (GitHub only) (default: main branch)
+
+			Behavior:
+				- Creates the target installation directory if it doesn't exist
+				- For a local source folder: stages the source files to the target directory
+				- For a GitHub source: downloads, extracts, & stages archive contents to the target directory
+				- Detects operating system and architecture, then selects the executable to install with platform-specific fallback:
+					1. First tries {name}-{os}-{architecture} (e.g., myapp-macos-arm64)
+					2. Falls back to {name} (generic, non-platform-specific)
+					3. Errors with a listing of available files if neither is found
+				- Sets permissions on the executable and creates a symlink at ~/.local/bin/<name> pointing to it
+				- Runs the installed executable with the --init flag to perform initialization/migration tasks and verifies its success
+				- Verifies installation by running the installed executable with the --version flag
+
+			Remarks:
+				Source (--src) above does not usually refer to source files as typically understood in software projects. It simply means the "source" of the installation files. For a local source, it is typically the build output folder (e.g., ./dist). A remote GitHub source is typically a repo that contains only build output files that have been deployed to it.
+
+			Examples:
+				install --src https://github.com/user/repo.git --name myapp --version v1.0.0
+				install --src ./dist --name myapp --target /custom/install/path

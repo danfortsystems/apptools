@@ -1,0 +1,9 @@
+Features
+
+	- Run commands directly from GitHub without local installation
+	- Unified toolset for monorepo development
+	- Supports Node.js, PostgreSQL, SQLite, containers (Podman), and Playwright
+	- Environment variable-based configuration for project behavior
+	- Comprehensive logging and error handling
+	- Container Management:
+		Container names are generic (minio, mailhog) for sharing across projects. Isolation is achieved through per-project buckets (for object storage) and per-project mail-from addresses (for SMTP), all of which as specified with env variables. Containers are installed based on presence of the env variables OBJECT_STORAGE_ROOT_URL (MinIO) and SMTP_HOST (MailHog). See the Environment Variables section for more details.

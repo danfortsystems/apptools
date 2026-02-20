@@ -60,7 +60,7 @@ SYSTEM ARCHITECTURE
 			- _postgres			# PostgreSQL-specific database operations (executable utility)
 			- _sqlite			# SQLite-specific database operations (executable utility)
 
-		When installed locally, all files are placed in the installation directory (e.g., ~/.local/bin/apptools/). The main "project" script and other frequently used commands may be symlinked into PATH for easy access.
+		When installed locally, all files are placed in the installation directory (e.g., ~/.local/share/apptools/). A symlink to the main executable is created in ~/.local/bin/ for easy access.
 
 		Internal Organization:
 			- User-facing commands: Files without underscore prefixes (project, deps, build, etc.)
@@ -103,28 +103,34 @@ COMMAND LINE INTERFACE
 				project deps --reset						# Reset and reinstall all
 				project deps --reset db,js					# Reset db and js, install others
 
-		Build
-			Usage: build [--dest <path>] [--only app|db] [--db-url <url>] [--db-path <path>] [--db-reset-ok]
+		build [--dest <path>] [--only <targets>] [--db-url <url>] [--db-path <path>] [--db-reset-ok]
+			Build application code, executable, and/or database
 
-			Arguments:
-				- --dest: Output directory for build artifacts (default: ./dist)
-				- --only: Build only app code or only database (values: app, db)
-				- --db-url: PostgreSQL connection URL for database build
-				- --db-path: SQLite database file path for database build
-				- --db-reset-ok: Allow database reset when no migration script exists
+			Options:
+				--dest <path>: Output directory for build artifacts (default: ./dist)
+				--only <targets>: Comma-separated list of targets to build: app, exc, and/or db (default: all)
+				--db-url <url>: PostgreSQL connection URL for database build (default: DATABASE_URL env var)
+				--db-path <path>: SQLite database file path for database build (default: DB_PATH env var)
+				--db-reset-ok: Allow database reset when no migration script exists (default: disabled)
 
 			Behavior:
-				- Processes SQL schema files to generate database initialization scripts
-				- Compares existing schema with DDL scripts to detect changes
-				- Generates db.init.sql always
-				- Generates db.migrate.sql if schema differences detected
-				- --db-reset-ok flag allows database reset when no migration script exists
+				Building the various targets involve:
+					- Application code (app): Typechecking and bundling client & server app code
+					- Executable (exc): Creating self-contained platform specific executable (uses bin/main.ts entry point by convention). Output is named {package}-{os}-{architecture} (e.g., myapp-macos-arm64, myapp-linux-x64)
+					- Db (db): Generating db init/migration scripts as necessary
+
+				The db build consolidates the schema sql files into a single db.init.sql script with proper dependency ordering, in the build output folder, that acts as a reference script for (re)creating the correct schema. It then checks if the db schema files are compatible with the db referenced by the effective db url or db path argument and proceeds as follows:
+					- If the schema has not changed, it does nothing further.
+					- If the schema has data and has changed, it expects a .migrate.sql file in the schema sql script folder, containing migration logic to preserve existing data, which is copied to the build output folder.
+					- Otherwise if the schema has changed but has no data or --db-reset-ok is passed, it creates another consolidated init script (but this time named as db.migrate.sql) in the build output folder. 
+					
+					Whenever the app is next started or tested, any existing db.migrate.sql in the build output folder is applied to the attached db and deleted on success.
 
 			Examples:
-				project build								# Full build to ./dist
-				project build --dest ./build				# Build to custom directory
-				project build --only db					# Database build only
-				project build --only app --dest ./build	# App build only to custom directory
+				project build									# Full build to ./dist
+				project build --dest ./build					# Build to custom directory
+				project build --only db	--db-path ./path/to/db	# Database build only with db path specified
+				project build --only app --dest ./build			# App build only to custom directory
 
 		Test
 			Usage: test [--build-dir <dir>] [--no-db-create] [--db-url <url>] [--keep-db-file] [--log-dir <dir>] [--only <types>] [--fast]
@@ -139,8 +145,8 @@ COMMAND LINE INTERFACE
 				- --fast: Use fast Playwright configuration (Chrome only, faster execution)
 
 			Examples:
-				project test								# Run all tests
-				project test --only units					# Run only unit tests
+				project test							# Run all tests
+				project test --only units				# Run only unit tests
 				project test --only api,gui				# Run API and GUI tests
 				project test --fast						# Run all tests with fast config
 
@@ -211,27 +217,30 @@ COMMAND LINE INTERFACE
 				This deployment approach can also work for GitHub-based deploys to popular PaaS platforms like Render.com. The PaaS project is connected, not to the main project GitHub repo, but to a dedicated deploy-only Github repo, and this deploy repo is what is passed as the --repo argument to the deploy script. So the PaaS does not even asee the source files, only the build files that are staged on the deploy repo. Thus, we also do not need to build on the PaaS again.
 
 		Install
-			Usage: install --src <url OR folder path> --target <local-install-folder-path> --main <main-binary-file> [--version <version-number-tag>]
+			Usage: install --src <url OR folder path> --name <command-name> [--target <local-install-folder-path>] [--version <version-number-tag>]
 
 			Arguments:
-				- --src: Where to get the installation files from: either the URL of a remote Github repo, or the path to a local folder. Defaults to the ./dist folder relative to the root of the current project we are running the command from, if any.
-				- --target: The target local folder path to install the files in.
-				- --main: The name of the primary binary/executable file in the installation
+				- --src: Where to get the installation files from: either the URL of a remote Github repo, or the path to a local folder. Required.
+				- --name: The package/command name. Used to select the executable to install and as the symlink name. Required.
+				- --target: The target local folder path to install the files in. Defaults to ~/.local/share/<name>.
 				- --version: The tag of the version number to install (only applicable for Github installs)
 
 			Behavior:
 				The install command, when invoked, should:
-				- Create the target installation directory if it doesn't exist
+				- Create the target installation directory if it doesn’t exist
 				- Copy or download the installation files from the source (local or remote) into the target folder. For a GitHub repo, HTTPS is used to download the version archive file (e.g., https://github.com/owner/repo/archive/refs/tags/v0.1.0.tar.gz) which is then piped to tar to extract it. If no version argument was provided, the latest main archive is downloaded. After extraction, the contents of the archive’s top-level directory are moved up one level into the root of the target installation directory.
-				- Set proper permissions on the executable file indicated by the --main argument
-				- Create a symlink to the main binary in a standard user/system bin directory that's usually in the PATH variable (e.g.,) ~/.local/bin)
+				- Detect the current operating system and architecture (e.g., Darwin→macos, Linux→linux; x86_64→x64, aarch64→arm64) and select the executable to install with platform-specific fallback:
+					1. First tries {name}-{os}-{architecture} (e.g., myapp-macos-arm64)
+					2. Falls back to {name} (generic, non-platform-specific)
+					3. Errors with a listing of available files if neither is found
+				- Set proper permissions on the selected executable and create a symlink at ~/.local/bin/<name> pointing to it
 				- Do initialization/migration tasks by running the command with --init flag (All installable projects are expected to support a --init flag for one-time initialization tasks)
 				- Verify the installation by running the command with --version (All installable projects are expected to support a --version flag for displaying the version)
 				- Display installation success message with path information
 
 			Examples:
-				install --src https://github.com/user/repo.git --target /path/to/install --main myapp --version v1.0.0
-				install --src ./local/path --target ~/apps/myapp --main myapp
+				install --src https://github.com/user/repo.git --name myapp --version v1.0.0
+				install --src ./dist --name myapp --target /custom/install/path
 
 INSTALLATION
 	Apptools as a whole and its scripts are coded in such a way that it can use its install script to install itself. Apart from the install command, no other command in AppTools can be run on AppTools itself. The project is hosted at the remote git repo https://github.com/danfortsystems/apptools, with the following file structure:
@@ -247,12 +256,16 @@ ENVIRONMENT VARIABLES
 		- DB_PATH: SQLite database file path
 
 	Container Service Variables:
-		- OBJECT_STORAGE_BUCKET: MinIO bucket name for project isolation
-		- MSG_FROM_EMAIL_ADDRESS: Email address for MailHog per-project isolation
+		- OBJECT_STORAGE_ROOT_URL: Root URL for S3-compatible object storage. When set to a local URL (e.g., http://localhost:9000), enables MinIO container management by AppTools
+		- OBJECT_STORAGE_BUCKET: Object storage bucket name. Used to create project-specific storage areas within the shared MinIO container
+		- OBJECT_STORAGE_ACCESS_KEY_ID: Access key for object storage authentication (used when OBJECT_STORAGE_ROOT_URL is local)
+		- OBJECT_STORAGE_ACCESS_KEY_SECRET: Access key secret for object storage authentication (used when OBJECT_STORAGE_ROOT_URL is local)
+		- SMTP_HOST: SMTP server host. When set to a local URL (e.g., http://localhost:1025), enables MailHog container management by AppTools
+		- MSG_FROM_EMAIL_ADDRESS: Email address for per-project email separation in MailHog
 		- SMS_* (proposed): SMS service configuration variables
 
 	Testing Variables:
-		- PLAYWRIGHT_BROWSERS_PATH: Path for Playwright browser installations
+		- PLAYWRIGHT_BROWSERS_PATH: Path for Playwright browser installations. When set, triggers Playwright browser installation
 
 	Container Management:
 		- Container names are generic (minio, mailhog) for sharing across projects
